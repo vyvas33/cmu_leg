@@ -1,5 +1,5 @@
 def main():
-    print("Hello from cmu-leg!")
+    print("Hello from Legged Systems Group!")
 
 
 if __name__ == "__main__":

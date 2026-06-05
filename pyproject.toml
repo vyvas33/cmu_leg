@@ -1,4 +1,4 @@
-[CMU Leg Control]
+[project]
 name = "cmu-leg"
 version = "0.1.0"
 description = "Python software stack for the CMU Prosthetic Leg"

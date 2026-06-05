@@ -9,7 +9,7 @@ class Lowpass:
         normal_cutoff = cutoff_freq / nyquist
         self._sos = butter(order, normal_cutoff, 
                           btype='low', output='sos')
-        self._zi = sosfilt_zi(self._sos)
+        self._zi = sosfilt_zi(self._sos) * 0.0  # start from zero
     
     def compute(self, u: float) -> float:
         y, self._zi = sosfilt(self._sos, [u], zi=self._zi)

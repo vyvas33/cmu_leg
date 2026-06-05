@@ -1,4 +1,4 @@
-[project]
+[CMU Leg Control]
 name = "cmu-leg"
 version = "0.1.0"
 description = "Python software stack for the CMU Prosthetic Leg"
@@ -6,4 +6,5 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "numpy>=2.4.6",
+    "scipy>=1.17.1",
 ]

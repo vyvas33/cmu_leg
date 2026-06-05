@@ -34,6 +34,7 @@ class ProsthesisState:
     ankle_accel: float = 0.0
     ankle_torque_measured: float = 0.0
 
+    #grf
     toe_grf: float = 0.0
     heel_grf: float = 0.0
     grf_R: float = 0.0

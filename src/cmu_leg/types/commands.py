@@ -26,6 +26,6 @@ class DriveCommand:
 
 #the output of the high level controller
 @dataclass
-class TorqueCommand:
+class TorqueDesired:
     knee_desired: float = 0.0
     ankle_desired: float = 0.0

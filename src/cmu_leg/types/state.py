@@ -51,7 +51,7 @@ class ProsthesisState:
     control_enabled: bool = False
     initializing: bool = False
 
-    vicon_sync: bool #need to confirm this
+    vicon_sync: bool = False #need to confirm this
 
 
 

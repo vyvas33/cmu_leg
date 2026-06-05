@@ -1,36 +1,30 @@
 from cmu_leg.types.state import ProsthesisState
 from cmu_leg.types.commands import TorqueDesired
-from cmu_leg.control.filters import Lowpass
+from cmu_leg.control.utils import Lowpass
+import cmu_leg.config.params as params
 import numpy as np
 
 
 # This class takes in the state and the desired torque from high level controller, computes the commanded torque and sends it to knee torque controller.   
 class KneeTorqueConditioning:
-    def __init__(
-        self,
-        knee_torque_max: float = 0.0,
-        knee_angle_max_soft: float = 0.0,
-        knee_angle_min_soft: float = 0.0,
-        c_jointstop: float = 0.0,
-        w_max_jointstop: float = 0.0,
-        damping_gain: float = 0.15,
-        knee_up_limit: float = 0.0,
-        ext: float = 0.0, #need to find this value 
-    ):
-        self.knee_torque_max = knee_torque_max
-        self.knee_angle_max_soft = knee_angle_max_soft
-        self.knee_angle_min_soft = knee_angle_min_soft
-        self.c_jointstop = c_jointstop 
-        self.ext = ext
-        self.w_max_jointstop = w_max_jointstop
-        self.damping_gain = damping_gain
-        self.knee_up_limit = knee_up_limit
+    def __init__(self):
+        self.knee_torque_max = params.KNEE_TORQUE_MAX
+        self.knee_angle_max_soft = params.KNEE_ANGLE_MAX_SOFT
+        self.knee_angle_min_soft = params.KNEE_ANGLE_MIN_SOFT
+        self.c_jointstop = params.C_JOINTSTOP 
+        self.ext = params.EXT
+        self.w_max_jointstop = params.W_MAX_JOINTSTOP
+        self.damping_gain = params.DAMPING_GAIN
+        self.knee_up_limit = params.KNEE_UP_LIMIT
         self._lowpass = Lowpass()
 
         # change this to true once everything is verified as safe to use.
         self._verified = False
 
-    def compute(self, state: ProsthesisState, desired_torque: TorqueDesired): 
+    def reset(self) -> None:
+        self._lowpass.reset(0.0)
+
+    def compute(self, state: ProsthesisState, desired_torque: TorqueDesired):
 
         if not self._verified:
             raise NotImplementedError("Knee Torque Conditioning not verified yet!")

@@ -2,20 +2,30 @@ from cmu_leg.types.state import ProsthesisState
 from cmu_leg.types.commands import TorqueDesired
 from cmu_leg.control.utils import Lowpass
 import cmu_leg.config.params as params
+from cmu_leg.config.params import KneeParams, CommonParams
 import numpy as np
 
 
-# This class takes in the state and the desired torque from high level controller, computes the commanded torque and sends it to knee torque controller.   
+# This class takes in the state and the desired torque from high level controller, computes the commanded torque and sends it to knee torque controller.
 class KneeTorqueConditioning:
-    def __init__(self):
-        self.knee_torque_max = params.KNEE_TORQUE_MAX
-        self.knee_angle_max_soft = params.KNEE_ANGLE_MAX_SOFT
-        self.knee_angle_min_soft = params.KNEE_ANGLE_MIN_SOFT
-        self.c_jointstop = params.C_JOINTSTOP 
-        self.ext = params.EXT
-        self.w_max_jointstop = params.W_MAX_JOINTSTOP
-        self.damping_gain = params.DAMPING_GAIN
-        self.knee_up_limit = params.KNEE_UP_LIMIT
+    def __init__(self, knee: KneeParams = params.KNEE, common: CommonParams = params.COMMON):
+        self.knee_torque_max = knee.torque_max
+        self.knee_angle_max_soft = knee.angle_max_soft
+        self.knee_angle_min_soft = knee.angle_min_soft
+        self.c_jointstop = knee.c_jointstop
+        self.w_max_jointstop = knee.w_max_jointstop
+        self.damping_gain = common.damping_gain
+        self.knee_up_limit = knee.up_limit
+
+        # `ext` is UNRESOLVED. AnkleTorqueConditioning already uses per-stop sign
+        # multipliers (knee.flex_ext = +1 at the upper stop, knee.extend_ext = -1
+        # at the lower). This knee block still applies a single shared `ext` in
+        # BOTH _flexion_stop and _extension_stop — the bug flagged at the bottom
+        # of this file. Splitting it is a behavioral change pending Simulink
+        # verification, so `ext` is deliberately left None: __init__ succeeds, but
+        # compute() is unreachable behind the _verified gate until this is
+        # reconciled. See [[low-level-conditioning-ext-pending]].
+        self.ext = None  # TODO(ext): resolve flex vs extend signs (knee.flex_ext / knee.extend_ext)
         self._lowpass = Lowpass()
 
         # change this to true once everything is verified as safe to use.

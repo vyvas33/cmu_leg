@@ -13,22 +13,23 @@
 
 from cmu_leg.types.commands import LowLevelOutput, DriveCommand
 import cmu_leg.config.params as params
+from cmu_leg.config.params import KneeParams, AnkleParams
 
 
 class DriveOutput:
-    def __init__(self):
+    def __init__(self, knee: KneeParams = params.KNEE, ankle: AnkleParams = params.ANKLE):
         # rad/s -> counts/s   (1 / motor_abs_counts_to_rad)
-        self.knee_velocity_gain = 1.0 / params.KNEE_MOTOR_ABS_COUNTS_TO_RAD
-        self.ankle_velocity_gain = 1.0 / params.ANKLE_MOTOR_ABS_COUNTS_TO_RAD
+        self.knee_velocity_gain = 1.0 / knee.motor_abs_counts_to_rad
+        self.ankle_velocity_gain = 1.0 / ankle.motor_abs_counts_to_rad
 
         # Nm -> per-mille of rated torque
         # rated torque at gearbox output = rated_current * torque_constant * gear_ratio
-        self.knee_torque_gain = 1000.0 / (params.KNEE_RATED_CURRENT
-                                          * params.KNEE_TORQUE_CONSTANT
-                                          * params.KNEE_GEAR_RATIO)
-        self.ankle_torque_gain = 1000.0 / (params.ANKLE_RATED_CURRENT
-                                           * params.ANKLE_TORQUE_CONSTANT
-                                           * params.ANKLE_GEAR_RATIO)
+        self.knee_torque_gain = 1000.0 / (knee.rated_current
+                                          * knee.torque_constant
+                                          * knee.gear_ratio)
+        self.ankle_torque_gain = 1000.0 / (ankle.rated_current
+                                           * ankle.torque_constant
+                                           * ankle.gear_ratio)
 
         # change this to true once everything is verified as safe to use.
         self._verified = False

@@ -26,7 +26,7 @@ import cmu_leg.config.params as params
 
 class LowLevelControl:
     def __init__(self):
-        self.startup_mute_ticks = params.STARTUP_MUTE_TICKS
+        self.startup_mute_ticks = params.COMMON.startup_mute_ticks
 
         # knee pipeline: conditioning -> controller -> saturation
         self.knee_torque_conditioning = KneeTorqueConditioning()

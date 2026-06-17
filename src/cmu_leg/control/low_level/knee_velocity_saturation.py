@@ -31,25 +31,26 @@
 from cmu_leg.types.state import ProsthesisState
 from cmu_leg.control.utils import Lowpass
 import cmu_leg.config.params as params
+from cmu_leg.config.params import KneeParams, CommonParams
 import numpy as np
 
 
 class KneeVelocitySaturation:
-    def __init__(self):
-        self.knee_vel_max = params.KNEE_VEL_MAX
-        self.knee_torque_max = params.KNEE_TORQUE_MAX
-        self.knee_angle_min = params.KNEE_ANGLE_MIN
-        self.knee_angle_max = params.KNEE_ANGLE_MAX
+    def __init__(self, knee: KneeParams = params.KNEE, common: CommonParams = params.COMMON):
+        self.knee_vel_max = knee.vel_max
+        self.knee_torque_max = knee.torque_max
+        self.knee_angle_min = knee.angle_min
+        self.knee_angle_max = knee.angle_max
 
         self._lowpass_velocity = Lowpass(
-            cutoff_freq=params.KNEE_VEL_SAT_LOWPASS_CUTOFF,
-            sample_rate=params.SAMPLE_RATE,
-            order=params.KNEE_VEL_SAT_LOWPASS_ORDER,
+            cutoff_freq=knee.vel_sat_lowpass_cutoff,
+            sample_rate=common.sample_rate,
+            order=knee.vel_sat_lowpass_order,
         )
         self._lowpass_torque_ff = Lowpass(
-            cutoff_freq=params.KNEE_VEL_SAT_LOWPASS_CUTOFF,
-            sample_rate=params.SAMPLE_RATE,
-            order=params.KNEE_VEL_SAT_LOWPASS_ORDER,
+            cutoff_freq=knee.vel_sat_lowpass_cutoff,
+            sample_rate=common.sample_rate,
+            order=knee.vel_sat_lowpass_order,
         )
 
         # change to True once everything is verified as safe to use.

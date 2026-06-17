@@ -31,25 +31,26 @@
 from cmu_leg.types.state import ProsthesisState
 from cmu_leg.control.utils import Lowpass
 import cmu_leg.config.params as params
+from cmu_leg.config.params import AnkleParams, CommonParams
 import numpy as np
 
 
 class AnkleVelocitySaturation:
-    def __init__(self):
-        self.ankle_vel_max = params.ANKLE_VEL_MAX
-        self.ankle_torque_max = params.ANKLE_TORQUE_MAX
-        self.ankle_angle_min = params.ANKLE_ANGLE_MIN
-        self.ankle_angle_max = params.ANKLE_ANGLE_MAX
+    def __init__(self, ankle: AnkleParams = params.ANKLE, common: CommonParams = params.COMMON):
+        self.ankle_vel_max = ankle.vel_max
+        self.ankle_torque_max = ankle.torque_max
+        self.ankle_angle_min = ankle.angle_min
+        self.ankle_angle_max = ankle.angle_max
 
         self._lowpass_velocity = Lowpass(
-            cutoff_freq=params.ANKLE_VEL_SAT_LOWPASS_CUTOFF,
-            sample_rate=params.SAMPLE_RATE,
-            order=params.ANKLE_VEL_SAT_LOWPASS_ORDER,
+            cutoff_freq=ankle.vel_sat_lowpass_cutoff,
+            sample_rate=common.sample_rate,
+            order=ankle.vel_sat_lowpass_order,
         )
         self._lowpass_torque_ff = Lowpass(
-            cutoff_freq=params.ANKLE_VEL_SAT_LOWPASS_CUTOFF,
-            sample_rate=params.SAMPLE_RATE,
-            order=params.ANKLE_VEL_SAT_LOWPASS_ORDER,
+            cutoff_freq=ankle.vel_sat_lowpass_cutoff,
+            sample_rate=common.sample_rate,
+            order=ankle.vel_sat_lowpass_order,
         )
 
         # change to True once everything is verified as safe to use.

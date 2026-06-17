@@ -11,31 +11,28 @@
 #   omega_des = spring_velocity_filt + tau_dot / Ks + Kp * (tau_cmd - tau_meas)
 #   tau_ff    = tau_cmd + (bm/Ks)*tau_dot + (Jm/Ks)*tau_ddot
 #
-# Differences vs. KneeTorqueController:
-#   - omega_des consumes LPF(spring_velocity), NOT raw joint velocity.
-#   - No efficiency division on tau_ff (Simulink had none, matching arch.md
-#     "Ankle efficiency compensation: disabled").
-#   - Spring-acceleration branch in Simulink is gain-0 and therefore omitted.
+
 
 from cmu_leg.types.state import ProsthesisState
 from cmu_leg.control.utils import BackwardDifference, Lowpass
 import cmu_leg.config.params as params
+from cmu_leg.config.params import AnkleParams, CommonParams
 
 
 class AnkleTorqueController:
-    def __init__(self):
-        self.ankle_kp = params.ANKLE_KP
-        self.ankle_stiffness = params.ANKLE_STIFFNESS
-        self.ankle_motor_damping = params.ANKLE_MOTOR_DAMPING
-        self.ankle_motor_inertia = params.ANKLE_MOTOR_INERTIA
-        self.sample_time = params.SAMPLE_TIME
+    def __init__(self, ankle: AnkleParams = params.ANKLE, common: CommonParams = params.COMMON):
+        self.ankle_kp = ankle.kp
+        self.ankle_stiffness = ankle.stiffness
+        self.ankle_motor_damping = ankle.motor_damping
+        self.ankle_motor_inertia = ankle.motor_inertia
+        self.sample_time = common.sample_time
 
         self._dd_tau = BackwardDifference(self.sample_time)
         self._dd_tau_dot = BackwardDifference(self.sample_time)
         self._lowpass_spring_velocity = Lowpass(
-            cutoff_freq=params.ANKLE_TORQUE_CTRL_SPRING_VEL_LOWPASS_CUTOFF,
-            sample_rate=params.SAMPLE_RATE,
-            order=params.ANKLE_TORQUE_CTRL_SPRING_VEL_LOWPASS_ORDER,
+            cutoff_freq=ankle.torque_ctrl_spring_vel_lowpass_cutoff,
+            sample_rate=common.sample_rate,
+            order=ankle.torque_ctrl_spring_vel_lowpass_order,
         )
 
         # change to True once everything is verified as safe to use.

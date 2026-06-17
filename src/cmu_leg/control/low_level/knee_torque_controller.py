@@ -15,15 +15,16 @@
 from cmu_leg.types.state import ProsthesisState
 from cmu_leg.control.utils import BackwardDifference
 import cmu_leg.config.params as params
+from cmu_leg.config.params import KneeParams, CommonParams
 
 class KneeTorqueController:
-    def __init__(self):
-        self.knee_kp = params.KNEE_KP
-        self.knee_stiffness = params.KNEE_STIFFNESS
-        self.knee_motor_damping = params.KNEE_MOTOR_DAMPING
-        self.knee_motor_inertia = params.KNEE_MOTOR_INERTIA
-        self.knee_motor_eff = params.KNEE_MOTOR_EFF
-        self.sample_time = params.SAMPLE_TIME
+    def __init__(self, knee: KneeParams = params.KNEE, common: CommonParams = params.COMMON):
+        self.knee_kp = knee.kp
+        self.knee_stiffness = knee.stiffness
+        self.knee_motor_damping = knee.motor_damping
+        self.knee_motor_inertia = knee.motor_inertia
+        self.knee_motor_eff = knee.motor_eff
+        self.sample_time = common.sample_time
 
         self._dd_tau = BackwardDifference(self.sample_time)
         self._dd_tau_dot = BackwardDifference(self.sample_time)

@@ -33,7 +33,7 @@ import scipy.io as sio
 # so `import read_encoders` resolves to the module package one level up.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from read_encoders import EncoderCalibration, RawSensorFrame, read, read_encoders
+from read_encoders import EncoderCalibration, RawSensorFrame, read_encoders, unpack_frame
 
 DATA_DIR = Path(__file__).parent                        # knee.mat / ankle.mat sit beside this test
 CAL_DIR = Path(__file__).resolve().parents[2] / "calibration"
@@ -148,6 +148,29 @@ def test_ankle_torque(readings, ankle):
 
 
 # --- I/O boundary -------------------------------------------------------------
-def test_read_is_stubbed():
-    with pytest.raises(NotImplementedError):
-        read()
+def test_unpack_frame_offsets():
+    """unpack_frame pulls each field from the right byte offset / signedness."""
+    import struct
+
+    knee = bytearray(14)
+    ankle = bytearray(14)
+    medulla = bytearray(23)
+
+    struct.pack_into("<i", knee, 0, -123_456)        # signed motor position
+    struct.pack_into("<H", knee, 8, 0x000F)          # status word (enabled)
+    struct.pack_into("<h", knee, 10, -42)            # signed torque
+    struct.pack_into("<i", ankle, 0, 654_321)
+    medulla[2] = 200                                 # counter
+    struct.pack_into("<I", medulla, 5, 216_255_998)  # knee joint (unsigned)
+    struct.pack_into("<I", medulla, 11, 131_000)     # ankle joint (pre-wrap)
+    struct.pack_into("<H", medulla, 17, 1788)        # hall 0
+
+    f = unpack_frame(bytes(knee), bytes(ankle), bytes(medulla))
+    assert f.knee_motor_counts == -123_456
+    assert f.knee_status_word == 0x000F
+    assert f.knee_motor_torque_raw == -42
+    assert f.ankle_motor_counts == 654_321
+    assert f.medulla_counter == 200
+    assert f.knee_joint_counts == 216_255_998
+    assert f.ankle_joint_counts == 131_000
+    assert f.hall_0 == 1788

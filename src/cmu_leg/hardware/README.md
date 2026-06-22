@@ -4,9 +4,9 @@ Live EtherCAT master + raw PDO boundary for the CMU leg.
 
 - Chain order (SOEM slave indices): **Knee Elmo (0) → Ankle Elmo (1) → Medulla (2)**, 1 ms cycle, DC SYNC0 = 1 ms.
 - Source of truth for all layouts below: `Hardware/knee_ankle_prosthesis.xml` (ENI).
-- Elmo mode: **Cyclic Sync Velocity (CSV, `0x6060 = 0x09`)** — velocity command + torque feedforward. `Target Torque`/`Target Position` are unused.
+- Elmo mode: startup SDO `0x6060 = 0x0A` (CST, the ENI default); runtime mode is **Cyclic Sync Velocity (CSV, `9`)** commanded each cycle via output PDO byte 20 — velocity command + torque feedforward. `Target Torque`/`Target Position` are unused.
 
-## Input PDOs (slave → master) → `RawSensorFrame`
+## Input PDOs (slave → master) → `RawEtherCATFrame`
 
 ### Knee / Ankle Elmo — 14 bytes (`0x1a00 / 0x1a13 / 0x1a1d`)
 | Byte | struct | Object | Field |

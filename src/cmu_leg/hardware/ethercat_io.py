@@ -1,63 +1,24 @@
 """
 EtherCAT Communication Interface.
 Input: Slave to Master, Output: Master to Slave
-
 Usage:
     ec = EtherCATInterface("eth0")
     ec.connect()
-    frame = ec.read()      # one RawSensorFrame per call
+    frame = ec.read()      # one RawEtherCATFrame per call
     ec.close()
-
 """
-
 import struct
-from dataclasses import dataclass
-
 import pysoem
+from cmu_leg.types.sensors import RawEtherCATFrame
 
 KNEE, ANKLE, MEDULLA = 0, 1, 2 # slave indices on the EtherCAT Chain
 
-MEDULLA_SYNC0_NS = 1_000_000 # need to verify this, can we change this?
+MEDULLA_SYNC0_NS = 1_000_000 # SYNC0 period = ENI DC cycle time (0x000f4240); must match the loop rate
 
-
-@dataclass(slots=True)
-class RawSensorFrame:
-    """Raw integer PDO inputs for one EtherCAT cycle. See README.md for the
-    byte/type/source map. Defaults let a replay harness build partial frames."""
-
-    # Knee Elmo
-    knee_motor_counts: int = 0
-    knee_digital_inputs: int = 0
-    knee_status_word: int = 0
-    knee_motor_torque_raw: int = 0
-    knee_analog: int = 0
-
-    # Ankle Elmo
-    ankle_motor_counts: int = 0
-    ankle_digital_inputs: int = 0
-    ankle_status_word: int = 0
-    ankle_motor_torque_raw: int = 0
-    ankle_analog: int = 0
-
-    # Medulla
-    medulla_id: int = 0
-    medulla_state: int = 0
-    medulla_counter: int = 0
-    medulla_error_flags: int = 0
-    medulla_limit_switch: int = 0
-    knee_joint_counts: int = 0
-    knee_joint_timestamp: int = 0
-    ankle_joint_counts: int = 0
-    ankle_joint_timestamp: int = 0
-    hall_0: int = 0
-    hall_1: int = 0
-    medulla_logic_voltage: int = 0
-
-
-def unpack_frame(knee: bytes, ankle: bytes, medulla: bytes) -> RawSensorFrame:
-    """Map the three slave input buffers to a RawSensorFrame. Offsets/types per
+def unpack_frame(knee: bytes, ankle: bytes, medulla: bytes) -> RawEtherCATFrame:
+    """Map the three slave input buffers to a RawEtherCATFrame. Offsets/types per
     README.md. Pure: feed live (slave.input) or recorded bytes."""
-    return RawSensorFrame(
+    return RawEtherCATFrame(
         knee_motor_counts=struct.unpack_from("<i", knee, 0)[0],
         knee_digital_inputs=struct.unpack_from("<I", knee, 4)[0],
         knee_status_word=struct.unpack_from("<H", knee, 8)[0],
@@ -84,12 +45,10 @@ def unpack_frame(knee: bytes, ankle: bytes, medulla: bytes) -> RawSensorFrame:
         medulla_logic_voltage=struct.unpack_from("<H", medulla, 21)[0],
     )
 
-
 # Elmo PDO assignment (see README): RxPDOs -> SM2 (0x1C12), TxPDOs -> SM3 (0x1C13).
 ELMO_RXPDOS = (0x1606, 0x160B, 0x160C)
 ELMO_TXPDOS = (0x1A00, 0x1A13, 0x1A1D)
 ELMO_OP_MODE = 0x0A  # ENI startup default (CST); runtime mode is CSV (9), written via PDO byte 20
-
 
 def _assign_pdos(slave, assign_obj: int, pdos: tuple[int, ...]) -> None:
     """Set a Sync Manager PDO assignment: clear count, write entries, set count."""
@@ -97,7 +56,6 @@ def _assign_pdos(slave, assign_obj: int, pdos: tuple[int, ...]) -> None:
     for i, pdo in enumerate(pdos, start=1):
         slave.sdo_write(assign_obj, i, struct.pack("<H", pdo))
     slave.sdo_write(assign_obj, 0, bytes([len(pdos)]))
-
 
 def configure_elmo(slave) -> None:
     """PreOp->SafeOp CoE config for one Elmo. Used as a pysoem config_func.
@@ -108,7 +66,6 @@ def configure_elmo(slave) -> None:
     slave.sdo_write(0x60C2, 1, bytes([1]))             # interpolation time period = 1 (ms)
 
 class EtherCATInterface:
-
     def __init__(self, ifname: str = "eth0"):
         self.ifname = ifname
         self.master = pysoem.Master()
@@ -170,7 +127,7 @@ class EtherCATInterface:
             for s in self.master.slaves
         )
 
-    def read(self):
+    def read(self) -> RawEtherCATFrame:
         m = self.master
         m.send_processdata()
         m.receive_processdata(timeout=2000)

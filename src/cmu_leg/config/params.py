@@ -1,136 +1,95 @@
-"""
-Source: baseline_controller/params.m and the .mat files it loads
-(sys_id_knee_params, sys_id_ankle_params, ankle_stiffness_params,
-spring_zero_positions, ankle_angle_offset, dynamic_params).
+"""Controller parameters, ported from baseline_controller/params.m and its .mat
+files (sys_id_*, ankle_stiffness_params, spring_zero_positions, encoder_counts_
+to_rad_polys, ankle_angle_offset, dynamic_params).
 
-Angles in radians, torques in Nm, velocities in rad/s.
-
-Parameters are grouped into frozen, slotted dataclasses (immutable at runtime,
-no accidental gain mutation mid-loop) and instantiated once at module load into
-the default instances KNEE / ANKLE / ENCODERS / STANDING / COMMON. Control blocks take a
-params object in their constructor (defaulting to these module instances), so
-the hot path still caches plain floats in __init__ while tests / per-subject
-configs can inject alternates.
-
-Joint / controller params (KneeParams / AnkleParams / EncoderParams /
-StandingParams) are *required* fields
-with no defaults: every value must be stated explicitly at instantiation so a
-missing parameter is a loud TypeError, not a silent default. Only CommonParams
-carries defaults.
+Needs cleanup
 """
 from dataclasses import dataclass
 from math import pi
 
 
-# ---------------------------------------------------------------------------
 # Common / shared
-# ---------------------------------------------------------------------------
 @dataclass(frozen=True, slots=True)
 class CommonParams:
-    # Timing (params.m: sample_freq / sample_period / tstep)
     sample_rate: float = 1000.0              # Hz
     sample_time: float = 0.001               # s
 
-    # Low Level Control startup mute: number of ticks after control_enabled
-    # rises during which the pipeline runs (filters/derivatives settle) but the
-    # drives are commanded to zero. Matches the "1 s Delay" on the drive-output
-    # switches inside the Simulink "Low Level Control" subsystem
-    # (DelayLength = sample_freq * 1 = 1000 samples at 1 kHz).
-    startup_mute_ticks: int = 1000           # = round(1.0 * sample_rate)
+    # ticks after control_enabled rises during which the pipeline runs but drives
+    # are muted to zero (filters settle); Simulink LLC "1 s Delay" = 1000 @ 1 kHz
+    startup_mute_ticks: int = 1000
 
-    # Subject / body (params.m)
     gravity: float = 9.81                    # m/s^2
-    swing_body_weight: float = 80.0          # kg (params.m: swing_body_weight)
-    stance_body_weight: float = 75.0         # kg (params.m, sub 0 active)
+    swing_body_weight: float = 80.0          # kg
+    stance_body_weight: float = 75.0         # kg
 
-    # Global limits / shared gains
-    torque_rate_lim: float = 20.0            # Nm/s (params.m: torque_rate_lim)
+    torque_rate_lim: float = 20.0            # Nm/s
     damping_gain: float = 0.15               # outer damping comp (both joints)
 
-    # Default torque-conditioning lowpass (25 Hz / order 2). The conditioning
-    # blocks currently construct Lowpass() with its own defaults; these fields
-    # exist for when those blocks are migrated to injected params.
+    # default torque-conditioning lowpass; unused until those blocks take params
     lowpass_cutoff: float = 25.0             # Hz
     lowpass_order: int = 2
 
 
-# ---------------------------------------------------------------------------
 # Knee
-# ---------------------------------------------------------------------------
 @dataclass(frozen=True, slots=True)
 class KneeParams:
-    # Motor / drivetrain
+    # motor / drivetrain
     torque_constant: float                   # Nm/A
     rated_current: float                     # A
     gear_ratio: float
     vel_max: float                           # rad/s, joint side
-    motor_damping: float                     # sys_id_knee_params.mat
+    motor_damping: float
     motor_inertia: float
     motor_eff: float
     motor_abs_counts_to_rad: float           # 2*pi / 2^30
 
-    # Spring / structural
     stiffness: float                         # Nm/rad
 
-    # Control
     kp: float
-    wc_ff: float                             # rad/s, Qff cutoff (params.m)
-    wc_dob: float                            # rad/s, DOB cutoff (params.m)
+    wc_ff: float                             # rad/s, Qff cutoff
+    wc_dob: float                            # rad/s, DOB cutoff
 
-    # Joint limits & soft stop
     angle_min: float
     angle_min_soft: float
     angle_max: float
     angle_max_soft: float
     torque_max: float                        # Nm
-    c_jointstop: float                       # Nm/rad (soft-stop stiffness)
-    w_max_jointstop: float                   # rad/s (soft-stop retract speed)
+    c_jointstop: float                       # Nm/rad, soft-stop stiffness
+    w_max_jointstop: float                   # rad/s, soft-stop retract speed
 
-    # Flexion/extension stop sign multipliers. In the Simulink model these are
-    # per-stop-block scalars (+1 at the upper limit, -1 at the lower), NOT a
-    # single shared value. Wiring of these into KneeTorqueConditioning is still
-    # pending (the conditioning block currently references a single unresolved
-    # `ext`). See [[low-level-conditioning-ext-pending]].
+    # per-stop sign multipliers (+1 upper, -1 lower). Wiring into
+    # KneeTorqueConditioning pending. See [[low-level-conditioning-ext-pending]].
     flex_ext: float                          # at angle_max_soft (+1)
     extend_ext: float                        # at angle_min_soft (-1)
 
-    # Knee Velocity Saturation lowpass (Simulink "Generated Filter Block")
     vel_sat_lowpass_cutoff: float            # Hz
     vel_sat_lowpass_order: int
 
     @property
     def up_limit(self) -> float:
-        """Alias kept for the conditioning block's `knee_up_limit`."""
+        """Alias for the conditioning block's `knee_up_limit`."""
         return self.angle_max_soft
 
 
-# ---------------------------------------------------------------------------
 # Ankle
-# ---------------------------------------------------------------------------
 @dataclass(frozen=True, slots=True)
 class AnkleParams:
-    # Motor / drivetrain
+    # motor / drivetrain
     torque_constant: float                   # Nm/A
     rated_current: float                     # A
     gear_ratio: float
     vel_max: float                           # rad/s, joint side
-    motor_damping: float                     # sys_id_ankle_params.mat
+    motor_damping: float
     motor_inertia: float
-    motor_eff: float                         # NOTE: efficiency comp disabled (arch.md)
+    motor_eff: float                         # efficiency comp disabled (arch.md)
     motor_abs_counts_to_rad: float           # 2*pi / 2^30
 
-    # Spring / structural
-    # `stiffness` is the linear scalar (params.m: 993.8613). `stiffness_poly`
-    # holds the 2-coeff nonlinear fit from ankle_stiffness_params.mat, not yet
-    # consumed by the controller.
-    stiffness: float                         # Nm/rad (linear)
-    stiffness_poly: tuple[float, float]      # Nm/rad poly coeffs
+    stiffness: float                         # Nm/rad, linear
+    stiffness_poly: tuple[float, float]      # Nm/rad nonlinear fit, not yet used
     angle_offset: float                      # rad
 
-    # Control
     kp: float
 
-    # Joint limits & soft stop
     angle_min: float
     angle_min_soft: float
     angle_max: float
@@ -139,29 +98,24 @@ class AnkleParams:
     c_jointstop: float                       # Nm/rad
     w_max_jointstop: float                   # rad/s
 
-    # Flexion/extension stop sign multipliers (see KneeParams note).
+    # per-stop sign multipliers (see KneeParams)
     flex_ext: float
     extend_ext: float
 
-    # Ankle Velocity Saturation lowpass ("Ankle Desired Saturation")
     vel_sat_lowpass_cutoff: float            # Hz
     vel_sat_lowpass_order: int
 
-    # Ankle Torque Controller spring-velocity lowpass (20 Hz). Spring-accel
-    # branch in Simulink is gain-0 and not ported.
+    # ankle torque controller spring-velocity lowpass (spring-accel branch unported)
     torque_ctrl_spring_vel_lowpass_cutoff: float   # Hz
     torque_ctrl_spring_vel_lowpass_order: int
 
 
-# ---------------------------------------------------------------------------
-# Encoders (spring_zero_positions.mat) — used by Get Prosthesis State.
-# Joint/spring absolute-encoder scaling and all zero offsets. Motor-side
-# counts-to-rad lives on the joint params (drivetrain scaling for drive output).
-# ---------------------------------------------------------------------------
+# Encoders (spring_zero_positions.mat) — linear scales, zeros, hall offsets.
+# Motor counts-to-rad lives on the joint params. Used by Get Prosthesis State.
 @dataclass(frozen=True, slots=True)
 class EncoderParams:
-    knee_abs_counts_to_rad: float            # 2*pi / 2^17
-    ankle_abs_counts_to_rad: float           # 2*pi / 2^17
+    knee_abs_counts_to_rad: float            # high-res abs joint encoder (empirical, sign-flipped)
+    ankle_abs_counts_to_rad: float           # 2*pi / 2^17 (17-bit abs)
 
     knee_abs_counts_offset: int              # knee0pos
     ankle_abs_counts_offset: int             # ankle0pos
@@ -172,36 +126,46 @@ class EncoderParams:
     hall_1_offset: int
 
 
-# ---------------------------------------------------------------------------
-# High-level: Standing (baseline "Standing Mode Control" -> "Standing").
-# Min-jerk quintic ramp from the latched start pose to a fixed standing pose
-# over `duration`, then a per-joint PD hold:
-#   tau = kp * (theta_traj - theta) - kd * theta_dot_filt
-# Same gains for knee and ankle (baseline "Knee PD Control" Stifness/Damping).
-#
-# theta_dot_filt is the joint velocity passed through a per-joint Butterworth
-# lowpass. Joint velocities leave Get Prosthesis State as raw finite differences
-# (model annotation: "Kinematic Signals are unfiltered!!"); baseline "Standing
-# Mode Control" lowpasses each velocity (NOT the angle) before the PD damping
-# term. The stiffness term uses the raw, unfiltered angle.
-# ---------------------------------------------------------------------------
+# Encoder error correction (encoder_counts_to_rad_polys.mat). Knee angle and
+# ankle spring angle each add a normalized polynomial correction: normalize
+# counts ((x-mean)/std), eval *_err_poly, de-normalize (*err_std + err_mean).
+# Polys are highest-power-first (polyval order).
+@dataclass(frozen=True, slots=True)
+class EncoderCorrection:
+    knee_counts_mean: float
+    knee_counts_std: float
+    knee_err_poly: tuple[float, ...]
+    knee_err_mean: float
+    knee_err_std: float
+
+    ankle_spring_counts_to_rad_poly: tuple[float, ...]
+    ankle_spring_counts_mean: float
+    ankle_spring_counts_std: float
+    ankle_spring_err_poly: tuple[float, ...]
+    ankle_spring_err_mean: float
+    ankle_spring_err_std: float
+
+    ankle_total_counts: int                  # 17-bit wrap modulus
+
+
+# Standing (baseline "Standing Mode Control"). Min-jerk ramp from the latched
+# start pose to a fixed pose over `duration`, then per-joint PD:
+#   tau = kp*(theta_traj - theta) - kd*theta_dot_filt
+# theta_dot_filt = joint velocity through a Butterworth lowpass (angle stays raw).
 @dataclass(frozen=True, slots=True)
 class StandingParams:
-    knee_target: float                       # rad, target knee angle (knee_stand_angle)
-    ankle_target: float                      # rad, target ankle angle (ankle_stand_angle)
-    duration: float                          # s, min-jerk ramp duration (stand duration)
-    kp: float                                # Nm/rad      (PD "Stifness")
-    kd: float                                # Nm/(rad/s)  (PD "Damping")
+    knee_target: float                       # rad
+    ankle_target: float                      # rad
+    duration: float                          # s, min-jerk ramp
+    kp: float                                # Nm/rad
+    kd: float                                # Nm/(rad/s)
 
-    # PD damping-term velocity prefilter (3 dB point, Butterworth, SOS).
-    knee_vel_lowpass_cutoff: float           # Hz, F3dB (baseline "Lowpass Filter2")
-    ankle_vel_lowpass_cutoff: float          # Hz, F3dB (baseline "Lowpass Filter7")
-    vel_lowpass_order: int                   # Butterworth order (both joints)
+    knee_vel_lowpass_cutoff: float           # Hz, F3dB
+    ankle_vel_lowpass_cutoff: float          # Hz, F3dB
+    vel_lowpass_order: int                   # Butterworth order
 
 
-# ---------------------------------------------------------------------------
 # Default instances (loaded once at import). Inject alternates in tests.
-# ---------------------------------------------------------------------------
 COMMON = CommonParams()
 
 KNEE = KneeParams(
@@ -259,7 +223,7 @@ ANKLE = AnkleParams(
 )
 
 ENCODERS = EncoderParams(
-    knee_abs_counts_to_rad=2.0 * pi / (2 ** 17),
+    knee_abs_counts_to_rad=-1.481916095218253e-08,   # verified (read_encoders); NOT 2pi/2^17
     ankle_abs_counts_to_rad=2.0 * pi / (2 ** 17),
     knee_abs_counts_offset=234_149_441,
     ankle_abs_counts_offset=-553,
@@ -269,24 +233,34 @@ ENCODERS = EncoderParams(
     hall_1_offset=2_261,
 )
 
+ENCODER_CORRECTION = EncoderCorrection(
+    knee_counts_mean=-49_248_866.40327176,
+    knee_counts_std=33_291_983.071372624,
+    knee_err_poly=(0.47774077, -0.38791886, -0.80362217, 0.50741695),
+    knee_err_mean=-6.0769758202966855e-06,
+    knee_err_std=0.00037360483505769084,
+    ankle_spring_counts_to_rad_poly=(-1.27664165e-15, 2.81074451e-10, 4.75918169e-05, 0.0),
+    ankle_spring_counts_mean=-1248.7238249778297,
+    ankle_spring_counts_std=7852.009105751588,
+    ankle_spring_err_poly=(2.37075304, -0.26480173, -4.05764862, -0.08075658, 0.56996956),
+    ankle_spring_err_mean=-0.00038694562088488905,
+    ankle_spring_err_std=0.0008505143990917394,
+    ankle_total_counts=2 ** 17,
+)
+
 STANDING = StandingParams(
-    knee_target=5.0 * pi / 180.0,            # baseline knee_stand_angle = 5 deg
-    ankle_target=0.0,                        # baseline ankle_stand_angle = 0 deg
-    duration=2.0,                            # baseline stand duration = 2 s
+    knee_target=5.0 * pi / 180.0,            # 5 deg
+    ankle_target=0.0,
+    duration=2.0,
     kp=150.0,
     kd=5.0,
-    knee_vel_lowpass_cutoff=25.0,            # baseline "Lowpass Filter2" F3dB
-    ankle_vel_lowpass_cutoff=20.0,           # baseline "Lowpass Filter7" F3dB
+    knee_vel_lowpass_cutoff=25.0,
+    ankle_vel_lowpass_cutoff=20.0,
     vel_lowpass_order=2,
 )
 
-# ---------------------------------------------------------------------------
-# Dynamic parameters (dynamic_params.mat -> dynpars, 9x1). Used by the
-# high-level (impedance / NM) controller, not yet ported. Order preserved from
-# the MATLAB vector; semantic mapping not confirmed from the model — label
-# before consuming downstream. Kept as a module-level immutable tuple until the
-# high-level controller is ported and can own a dedicated dataclass.
-# ---------------------------------------------------------------------------
+# dynamic_params.mat -> dynpars (9x1), for the high-level controller (not yet
+# ported). MATLAB order preserved; semantic mapping unconfirmed — label before use.
 DYNPARS: tuple[float, ...] = (
     0.0742, 1.5952, 0.0064, 3.5057, 0.0896,
     2.5055, 0.0305, 0.0117, 0.0865,

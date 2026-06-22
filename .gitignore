@@ -218,3 +218,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Run outputs (plots, recordings from tool/diagnostic scripts)
+output/
+*_live.png

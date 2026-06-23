@@ -6,6 +6,8 @@ Usage:
     ec.connect()
     frame = ec.read()      # one RawEtherCATFrame per call
     ec.close()
+
+vkalva, June 2026
 """
 import struct
 import pysoem

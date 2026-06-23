@@ -48,7 +48,7 @@ def _plot(joint, t, angles, out):
     png = out / f"{joint}_angles.png"
     fig.savefig(png, dpi=110); plt.close(fig)
 
-    # dump the same series to CSV: time + one column per angle (deg)
+    # dump to CSV
     names = list(angles)
     csv_path = out / f"{joint}_angles.csv"
     with open(csv_path, "w", newline="") as f:

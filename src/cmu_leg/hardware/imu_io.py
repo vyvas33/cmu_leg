@@ -1,1 +1,1 @@
-# IMU interface wrapper build on custom WitMotion APIß
+# IMU interface wrapper build on custom WitMotion API

@@ -18,6 +18,9 @@ What it demonstrates, in order:
 Single sensor on purpose: discover_port() RAISES if two CH340 IMUs are plugged
 in at once, so the two-sensor case needs explicit port paths — that's a job for
 the wrapper, not this learning script.
+
+lsusb will list: QinHeng Electronics HL-340 USB-Serial adapter
+
 """
 import sys
 import time

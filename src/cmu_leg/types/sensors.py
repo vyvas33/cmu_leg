@@ -3,9 +3,10 @@ from dataclasses import dataclass
 
 @dataclass(slots=True)
 class RawEtherCATFrame:
-    """Raw integer PDO inputs for one EtherCAT cycle, as they arrive on the bus
-    (before any scaling). See hardware/README.md for the byte/type/source map.
-    Defaults let a replay harness build partial frames."""
+    """Raw integer PDO inputs for one EtherCAT cycle, as they arrive on the bus. 
+    See hardware/README.md for the byte/type/source map.
+    Defaults let a replay harness build partial frames.
+    """
 
     # Knee Elmo
     knee_motor_counts: int = 0
@@ -34,3 +35,18 @@ class RawEtherCATFrame:
     hall_0: int = 0
     hall_1: int = 0
     medulla_logic_voltage: int = 0
+
+@dataclass(slots=True)
+class IMUFrame:
+    """SI-unit IMU outputs in each sensor's OWN frame (no EKF remap). 
+    Per-sensor pll timestamp + freshness flag.
+    """
+    thigh_acc: tuple[float, float, float] = (0.0, 0.0, 0.0)   # m/s²
+    thigh_gyro: tuple[float, float, float] = (0.0, 0.0, 0.0)  # rad/s
+    foot_acc: tuple[float, float, float] = (0.0, 0.0, 0.0)    # m/s²
+    foot_gyro: tuple[float, float, float] = (0.0, 0.0, 0.0)   # rad/s
+    thigh_time: float = 0.0    # pll_time_s from the driver
+    foot_time: float = 0.0
+    thigh_fresh: bool = False  # True if newer than the previous read()
+    foot_fresh: bool = False
+

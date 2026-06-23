@@ -126,6 +126,20 @@ class EncoderParams:
     hall_1_offset: int
 
 
+# IMU (two WitMotion HWT906, thigh + foot, over USB-serial). Ports are the stable
+# udev symlinks, not /dev/ttyUSB* (those aren't stable across replug). acc/gyro
+# ranges match the baseline Simulink Read IMU block (±16 g, ±2000 dps).
+@dataclass(frozen=True, slots=True)
+class IMUParams:
+    thigh_port: str
+    foot_port: str
+    baud: int                  # 921600 reliable on Linux
+    stream_rate_hz: int        # sensor output rate
+    lpf_cutoff_hz: int         # anti-alias; keep <= 0.4 * stream_rate
+    acc_range_g: int           # ±g
+    gyro_range_dps: int        # ±dps
+
+
 # Encoder error correction (encoder_counts_to_rad_polys.mat). Knee angle and
 # ankle spring angle each add a normalized polynomial correction: normalize
 # counts ((x-mean)/std), eval *_err_poly, de-normalize (*err_std + err_mean).
@@ -231,6 +245,16 @@ ENCODERS = EncoderParams(
     ankle_motor_abs_counts_offset=-951,
     hall_0_offset=1_738,
     hall_1_offset=2_261,
+)
+
+IMU = IMUParams(
+    thigh_port="/dev/imu_thigh",
+    foot_port="/dev/imu_foot",
+    baud=921600,
+    stream_rate_hz=200,        # tune later; 0.4*200=80 -> lpf 42 is the largest valid
+    lpf_cutoff_hz=42,
+    acc_range_g=16,
+    gyro_range_dps=2000,
 )
 
 ENCODER_CORRECTION = EncoderCorrection(

@@ -1,3 +1,11 @@
+"""
+A script to read and plot scaled encoder readings.
+
+Usage:
+uv run python -m cmu_leg.utility.read_encoders
+"""
+
+
 import csv
 import time
 from dataclasses import dataclass
@@ -10,7 +18,7 @@ import matplotlib.pyplot as plt
 from cmu_leg.types.sensors import RawEtherCATFrame
 from cmu_leg.config.params import ENCODERS, ENCODER_CORRECTION, KNEE, ANKLE
 from cmu_leg.hardware.ethercat_io import EtherCATInterface
-from cmu_leg.tools.paths import make_run_dir
+from cmu_leg.utility.utils import make_run_dir
 
 DURATION = 10.0  # seconds
 
@@ -56,6 +64,20 @@ def _plot(joint, t, angles, out):
         w.writerow(["time [s]", *names])
         w.writerows(zip(t, *(angles[n] for n in names)))
     print("saved", png, "and", csv_path)
+
+def _plot_idle(t, idle_ms, out):
+    """Loop slack before each 1 kHz tick, in ms. Dips toward/below zero mean the
+    loop overran its cycle budget (and the DC SYNC0 deadline)."""
+    fig, ax = plt.subplots(figsize=(11, 4))
+    ax.plot(t, idle_ms, linewidth=0.7)
+    ax.axhline(0.0, color="r", linestyle="--", linewidth=1.0, label="overrun threshold")
+    ax.set_title("Loop idle time", fontweight="bold")
+    ax.set_xlabel("loop time [s]"); ax.set_ylabel("idle [ms]")
+    ax.legend(); ax.grid(alpha=0.3)
+    fig.tight_layout()
+    png = out / "loop_idle.png"
+    fig.savefig(png, dpi=110); plt.close(fig)
+    print("saved", png)
 
 def _convert_to_readings(frame: RawEtherCATFrame) -> SensorReadings:
     knee_motor_angle = KNEE.motor_abs_counts_to_rad * (frame.knee_motor_counts - ENCODERS.knee_motor_abs_counts_offset)
@@ -104,15 +126,16 @@ def main():
     print(f"Recording for {DURATION} seconds")
 
     t_log = []
+    idle_log = []   # per-iteration loop slack (ms), for timing diagnosis
     knee = {"motor angle": [], "joint angle": []}
     ankle = {"motor angle": [], "spring angle": [], "joint angle": []}
 
     period = 0.001   # target loop period (s) -> ~1 kHz
     t0 = time.perf_counter()
-    next_t = t0
+    clk = t0
     try:
         while (t := time.perf_counter() - t0) < DURATION:
-            next_t += period
+            clk += period
             r = _convert_to_readings(ec.read())
             t_log.append(t)
             knee["motor angle"].append(degrees(r.knee_motor_angle))
@@ -121,9 +144,10 @@ def main():
             ankle["spring angle"].append(degrees(r.ankle_spring_angle))
             ankle["joint angle"].append(degrees(r.ankle_angle))
             # sleep only the time left in this period
-            dt = next_t - time.perf_counter()
-            if dt > 0:
-                time.sleep(dt)
+            idle = clk - time.perf_counter()
+            idle_log.append(idle * 1000.0)   # ms
+            if idle > 0:
+                time.sleep(idle)
     except KeyboardInterrupt:
         print("terminated early")
     finally:
@@ -132,6 +156,7 @@ def main():
     out = make_run_dir("read_encoders")
     _plot("Knee", t_log, knee, out)
     _plot("Ankle", t_log, ankle, out)
+    _plot_idle(t_log, idle_log, out)
 
 if __name__ == "__main__":
     main()

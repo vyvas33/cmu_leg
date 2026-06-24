@@ -5,14 +5,29 @@ However, unlike the ec.read() which outputs unscaled raw counts,
 imu.read() here outputs in SI units in sensors' frame.
 Typical Usage:
 
-imu = IMUInterface() 
-imu.connect() 
+discover_imu_ports()       # list CH340 and set params manually
+imu = IMUInterface()       
+imu.connect()
 frame = imu.read() # one frame per call; non-blocking
 imu.close()
 """
+import serial.tools.list_ports
+
 from cmu_leg.config.params import IMU
 from cmu_leg.hardware.witmotion.witapi import WitMotionSensor
 from cmu_leg.types.sensors import IMUFrame
+
+_CH340_VID = 6790  # CH340 / QinHeng USB-serial bridge (the chip witapi scans for)
+
+
+def discover_imu_ports() -> list[tuple[str, str | None, str | None]]:
+    """List connected CH340 (WitMotion) serial ports as (device, serial, location).
+    """
+    return [
+        (p.device, p.serial_number, p.location)
+        for p in serial.tools.list_ports.comports()
+        if p.vid == _CH340_VID
+    ]
 
 def _configure(sensor: WitMotionSensor) -> None:
     """Apply standard config to one connected sensor, then start streaming"""
@@ -24,9 +39,10 @@ def _configure(sensor: WitMotionSensor) -> None:
     sensor.stream()
     
 class IMUInterface:
-    def __init__(self):
-        self.thigh = WitMotionSensor(port = IMU.thigh_port, baud_bps=IMU.baud)
-        self.foot = WitMotionSensor(port=IMU.foot_port, baud_bps=IMU.baud)
+    def __init__(self, thigh_port: str | None = None, foot_port: str | None = None):
+        # default to the params ports; pass explicit paths to override
+        self.thigh = WitMotionSensor(port=thigh_port or IMU.thigh_port, baud_bps=IMU.baud)
+        self.foot = WitMotionSensor(port=foot_port or IMU.foot_port, baud_bps=IMU.baud)
 
         # last pll_time_s to drive the freshness flag  
         self._last_thigh_t = None

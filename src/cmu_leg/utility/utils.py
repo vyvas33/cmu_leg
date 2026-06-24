@@ -1,4 +1,4 @@
-"""Output-path helper for tool/diagnostic scripts.
+"""Helper functions for utility functions
 """
 from datetime import datetime
 from pathlib import Path

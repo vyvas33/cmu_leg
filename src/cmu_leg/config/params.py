@@ -126,12 +126,13 @@ class EncoderParams:
     hall_1_offset: int
 
 
-# IMU (two WitMotion HWT906, thigh + foot, over USB-serial). Ports are the stable
-# udev symlinks, not /dev/ttyUSB* (those aren't stable across replug). acc/gyro
-# ranges match the baseline Simulink Read IMU block (±16 g, ±2000 dps).
+# IMU (two WitMotion HWT906, thigh + foot, over USB-serial). Set the port paths
+# from imu_io.discover_imu_ports() (which CH340 is which IMU) — they can swap across
+# reboots/replugs, so update here after discovery. acc/gyro ranges match the
+# baseline Simulink Read IMU block (±16 g, ±2000 dps).
 @dataclass(frozen=True, slots=True)
 class IMUParams:
-    thigh_port: str
+    thigh_port: str            # set from discover_imu_ports()
     foot_port: str
     baud: int                  # 921600 reliable on Linux
     stream_rate_hz: int        # sensor output rate
@@ -248,11 +249,11 @@ ENCODERS = EncoderParams(
 )
 
 IMU = IMUParams(
-    thigh_port="/dev/imu_thigh",
-    foot_port="/dev/imu_foot",
+    thigh_port="/dev/ttyUSB0",   # update from discover_imu_ports()
+    foot_port="/dev/ttyUSB1",
     baud=921600,
-    stream_rate_hz=200,        # tune later; 0.4*200=80 -> lpf 42 is the largest valid
-    lpf_cutoff_hz=42,
+    stream_rate_hz=1000,        # tune later; 0.4*200=80 -> lpf 42 is the largest valid
+    lpf_cutoff_hz=256,
     acc_range_g=16,
     gyro_range_dps=2000,
 )

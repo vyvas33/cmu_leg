@@ -9,7 +9,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from cmu_leg.hardware.imu_io import IMUInterface
+from cmu_leg.hardware.imu_io import IMUInterface, discover_imu_bauds
 from cmu_leg.utility.utils import make_run_dir
 
 DURATION = 10.0  # seconds
@@ -62,7 +62,8 @@ def _plot_idle(t, idle_ms, out):
 
 
 def main():
-    imu = IMUInterface()
+    thigh_baud, foot_baud = discover_imu_bauds()
+    imu = IMUInterface(thigh_baud=thigh_baud, foot_baud=foot_baud)
     imu.connect()
     print(f"Recording IMU data for {DURATION} seconds")
 

@@ -5,8 +5,9 @@ However, unlike the ec.read() which outputs unscaled raw counts,
 imu.read() here outputs in SI units in sensors' frame.
 Typical Usage:
 
-discover_imu_ports()       # list CH340 and set params manually
-imu = IMUInterface()       
+discover_imu_ports()                            # list CH340 ports -> set params.IMU
+tb, fb = discover_imu_bauds()                   # probe each IMU's current baud
+imu = IMUInterface(thigh_baud=tb, foot_baud=fb) # ports from params, baud passed in
 imu.connect()
 frame = imu.read() # one frame per call; non-blocking
 imu.close()
@@ -14,7 +15,7 @@ imu.close()
 import serial.tools.list_ports
 
 from cmu_leg.config.params import IMU
-from cmu_leg.hardware.witmotion.witapi import WitMotionSensor
+from cmu_leg.hardware.witmotion.witapi import WitMotionSensor, discover_baud
 from cmu_leg.types.sensors import IMUFrame
 
 _CH340_VID = 6790  # CH340 / QinHeng USB-serial bridge (the chip witapi scans for)
@@ -29,6 +30,15 @@ def discover_imu_ports() -> list[tuple[str, str | None, str | None]]:
         if p.vid == _CH340_VID
     ]
 
+
+def discover_imu_bauds(thigh_port: str | None = None, foot_port: str | None = None) -> tuple[int, int]:
+    """Probe each IMU's current baud rate (per port). Ports default to params.IMU.
+    Returns (thigh_baud, foot_baud) — pass straight into IMUInterface()."""
+    return (
+        discover_baud(thigh_port or IMU.thigh_port),
+        discover_baud(foot_port or IMU.foot_port),
+    )
+
 def _configure(sensor: WitMotionSensor) -> None:
     """Apply standard config to one connected sensor, then start streaming"""
     sensor.set_acc_range(IMU.acc_range_g)
@@ -39,10 +49,12 @@ def _configure(sensor: WitMotionSensor) -> None:
     sensor.stream()
     
 class IMUInterface:
-    def __init__(self, thigh_port: str | None = None, foot_port: str | None = None):
-        # default to the params ports; pass explicit paths to override
-        self.thigh = WitMotionSensor(port=thigh_port or IMU.thigh_port, baud_bps=IMU.baud)
-        self.foot = WitMotionSensor(port=foot_port or IMU.foot_port, baud_bps=IMU.baud)
+    def __init__(self, thigh_port: str | None = None, foot_port: str | None = None,
+                 thigh_baud: int | None = None, foot_baud: int | None = None):
+        # default to params ports/baud; pass explicit values to override
+        # (e.g. thigh_baud/foot_baud from discover_imu_bauds()).
+        self.thigh = WitMotionSensor(port=thigh_port or IMU.thigh_port, baud_bps=thigh_baud or IMU.baud)
+        self.foot = WitMotionSensor(port=foot_port or IMU.foot_port, baud_bps=foot_baud or IMU.baud)
 
         # last pll_time_s to drive the freshness flag  
         self._last_thigh_t = None

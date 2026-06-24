@@ -39,6 +39,23 @@ def discover_imu_bauds(thigh_port: str | None = None, foot_port: str | None = No
         discover_baud(foot_port or IMU.foot_port),
     )
 
+def _connect_sensor(sensor: WitMotionSensor, attempts: int = 3) -> None:
+    """Connect one sensor, retrying on flaky register reads.
+
+    WitMotionSensor.connect() verifies comms with a retry loop but then does
+    single-shot register reads to sync hardware state; on a marginal link those
+    can time out with no retry. Retry the whole connect, closing the half-open
+    port between attempts so the next try starts clean."""
+    for attempt in range(1, attempts + 1):
+        try:
+            sensor.connect()
+            return
+        except (TimeoutError, ConnectionError):
+            sensor.disconnect()
+            if attempt == attempts:
+                raise
+
+
 def _configure(sensor: WitMotionSensor) -> None:
     """Apply standard config to one connected sensor, then start streaming"""
     sensor.set_acc_range(IMU.acc_range_g)
@@ -61,9 +78,9 @@ class IMUInterface:
         self._last_foot_t = None 
 
     def connect(self) -> None:
-        try: 
-            self.thigh.connect()
-            self.foot.connect()
+        try:
+            _connect_sensor(self.thigh)
+            _connect_sensor(self.foot)
             _configure(self.thigh)
             _configure(self.foot)
         except Exception:

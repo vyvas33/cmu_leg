@@ -5,7 +5,6 @@ Usage:
 uv run python -m cmu_leg.utility.read_encoders
 """
 
-
 import csv
 import time
 from dataclasses import dataclass

@@ -1,5 +1,5 @@
 """
-A script to read and plot thigh and foot IMU sensor streams
+Read IMU: A script to read and plot thigh and foot IMU sensor streams
 """
 
 import csv
@@ -9,6 +9,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+from cmu_leg.config.params import IMU
 from cmu_leg.hardware.imu_io import IMUInterface, discover_imu_bauds
 from cmu_leg.utility.utils import make_run_dir
 
@@ -65,14 +66,13 @@ def main():
     thigh_baud, foot_baud = discover_imu_bauds()
     imu = IMUInterface(thigh_baud=thigh_baud, foot_baud=foot_baud)
     imu.connect()
-    print(f"Recording IMU data for {DURATION} seconds")
+    print(f"Read IMU: Recording IMU data for {DURATION} seconds")
 
-    # per-IMU buffers; the two streams are async, so each is logged on its own clock
     t_thigh, thigh_acc, thigh_gyro = [], [], []
     t_foot, foot_acc, foot_gyro = [], [], []
-    t_loop, idle_log = [], []   # per-iteration loop slack (ms), for timing diagnosis
+    t_loop, idle_log = [], []   # idle time diagnosis
 
-    period = 0.001 # target loop period 1kHz (oversamples the IMU stream)
+    period = 1.0 / (2 * IMU.stream_rate_hz)  # 2x oversample the IMU stream
     t0 = time.perf_counter()
     clk = t0
     try:
@@ -99,6 +99,7 @@ def main():
     finally:
         imu.close()
 
+    print("Plotting and writing data to csv")
     out = make_run_dir("read_imu")
     _plot("Thigh", t_thigh, thigh_acc, thigh_gyro, out)
     _plot("Foot", t_foot, foot_acc, foot_gyro, out)

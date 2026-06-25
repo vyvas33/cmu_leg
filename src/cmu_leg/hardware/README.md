@@ -31,6 +31,16 @@ Both are proper rotations (axis relabel + sign, det = +1).
 
 ## EtherCAT
 
+The EtherCAT interface (`ethercat_io.py`) is the live master for the bus and the boundary for both joints and drives. `connect()` brings the chain up through SafeOp to Operational, after which each `read()` returns one `RawEtherCATFrame` of raw integer inputs, exactly as they arrive on the wire. Turning those counts into engineering units happens downstream, the same way the IMU remap is deferred, so the interface itself stays a thin transport. The read-only tools, like the encoder logger, only ever call `read()`.
+
+Writing is the other direction, and it is where the drives are brought to life. `write(cmd)` runs once per control tick and does the whole output cycle in one call: it derives each Elmo's control word from that drive's last status word and the master enable flag, packs the velocity command, torque feedforward and control word into the output PDOs, exchanges a single frame on the bus, and returns the fresh inputs. The control word comes from the Elmo state machine in `elmos/`, which walks each drive up the CiA-402 ladder toward Operation Enabled. Because the control word is re-derived from the status word every tick, bring-up, holding and fault recovery all happen on their own with nothing remembered between ticks; the only subtlety is that the word sent this tick is computed from the previous tick's status word, a one-cycle lag that is harmless for a machine that takes many cycles to climb.
+
+`enable` is a plain switch on the interface, defaulted to off so nothing energises by accident. The main loop owns it, flipping it on when a human turns the system on, and it flows straight into `write`. From the inputs the interface also derives a readiness signal, recomputed every tick. `drives_enabled()` is true when both Elmos report Operation Enabled in their status words, which is the real state of the drive rather than what the master happens to be commanding. `medulla_alive()` is true while the medulla's input counter keeps advancing, so a stalled board or bus shows up immediately. `control_enabled()` is the two together, and the main loop reads it each tick to decide whether to run the controllers or hold them in reset with a zero command.
+
+The medulla is read but never written. Its input counter is the heartbeat behind `medulla_alive`, and matching the baseline, the master sends nothing back to it; the medulla's output PDO is left at its default and the board does not watchdog on it.
+
+### Reference: bus and PDO map
+
 - Chain order (SOEM slave indices): **Knee Elmo (0) → Ankle Elmo (1) → Medulla (2)**, 1 ms cycle, DC SYNC0 = 1 ms.
 - Source of truth for all layouts below: `Hardware/knee_ankle_prosthesis.xml` (ENI).
 - Elmo mode: startup SDO `0x6060 = 0x0A` (CST, the ENI default); runtime mode is **Cyclic Sync Velocity (CSV, `9`)** commanded each cycle via output PDO byte 20 — velocity command + torque feedforward. `Target Torque`/`Target Position` are unused.

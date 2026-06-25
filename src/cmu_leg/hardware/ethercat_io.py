@@ -12,10 +12,17 @@ vkalva, June 2026
 import struct
 import pysoem
 from cmu_leg.types.sensors import RawEtherCATFrame
+from cmu_leg.types.commands import DriveCommand
+from cmu_leg.hardware.elmos.state_machine import drive_state, DriveState, control_word
 
 KNEE, ANKLE, MEDULLA = 0, 1, 2 # slave indices on the EtherCAT Chain
 
 MEDULLA_SYNC0_NS = 1_000_000 # SYNC0 period = ENI DC cycle time (0x000f4240); must match the loop rate
+
+# Ticks the medulla counter may repeat before we treat the medulla as dead. The
+# medulla increments its counter every cycle, so a stalled counter means the board
+# (or the bus) has stopped cycling. Tune on hardware.
+MEDULLA_STALL_LIMIT = 5
 
 def unpack_frame(knee: bytes, ankle: bytes, medulla: bytes) -> RawEtherCATFrame:
     """Map the three slave input buffers to a RawEtherCATFrame. Offsets/types per
@@ -47,6 +54,16 @@ def unpack_frame(knee: bytes, ankle: bytes, medulla: bytes) -> RawEtherCATFrame:
         medulla_logic_voltage=struct.unpack_from("<H", medulla, 21)[0],
     )
 
+def _pack_drive(velocity_counts: int, torque_per_mille: int, cw: int) -> bytes:
+    """Pack one Elmo's 24-byte output PDO (offsets per README; unused fields stay 0).
+    Output-side mirror of unpack_frame. Mode is fixed to CSV (9)."""
+    buf = bytearray(24)
+    struct.pack_into("<i", buf, 8, velocity_counts)    # 0x60ff Target Velocity
+    struct.pack_into("<h", buf, 16, torque_per_mille)  # 0x60b2 Torque Offset
+    struct.pack_into("<H", buf, 18, cw)                 # 0x6040 Control word
+    struct.pack_into("<b", buf, 20, 9)                  # 0x6060 Mode of operation = CSV
+    return bytes(buf)
+
 # Elmo PDO assignment (see README): RxPDOs -> SM2 (0x1C12), TxPDOs -> SM3 (0x1C13).
 ELMO_RXPDOS = (0x1606, 0x160B, 0x160C)
 ELMO_TXPDOS = (0x1A00, 0x1A13, 0x1A1D)
@@ -71,6 +88,11 @@ class EtherCATInterface:
     def __init__(self, ifname: str = "eth0"):
         self.ifname = ifname
         self.master = pysoem.Master()
+
+        self.enable = False                    # master switch; the main loop sets this
+        self._last_frame = RawEtherCATFrame()  # latest inputs, for the readiness checks
+        self._prev_medulla_counter = None      # previous counter, for the liveness check
+        self._medulla_stall_ticks = 0          # consecutive ticks the counter hasn't moved
 
     def connect(self) -> None:
         try:
@@ -133,12 +155,70 @@ class EtherCATInterface:
         m = self.master
         m.send_processdata()
         m.receive_processdata(timeout=2000)
-        return unpack_frame(
+        frame = unpack_frame(
             bytes(m.slaves[KNEE].input),
             bytes(m.slaves[ANKLE].input),
             bytes(m.slaves[MEDULLA].input),
         )
-    
+        self._ingest(frame)
+        return frame
+
+    def _ingest(self, frame: RawEtherCATFrame) -> None:
+        """Stash the latest frame and track medulla liveness. Called by every
+        exchange (read and, later, write)."""
+        if frame.medulla_counter == self._prev_medulla_counter:
+            self._medulla_stall_ticks += 1
+        else:
+            self._medulla_stall_ticks = 0
+        self._prev_medulla_counter = frame.medulla_counter
+        self._last_frame = frame
+
+    def drives_enabled(self) -> bool:
+        """Both Elmos report CiA-402 Operation Enabled (the status word, not the
+        commanded control word)."""
+        return (
+            drive_state(self._last_frame.knee_status_word) == DriveState.OPERATION_ENABLED
+            and drive_state(self._last_frame.ankle_status_word) == DriveState.OPERATION_ENABLED
+        )
+
+    def medulla_alive(self) -> bool:
+        """Medulla counter is still advancing (the board and bus are cycling)."""
+        return self._medulla_stall_ticks < MEDULLA_STALL_LIMIT
+
+    def control_enabled(self) -> bool:
+        """Readiness, recomputed each tick: both drives enabled and medulla alive.
+        The main loop reads this to decide whether to run the controllers."""
+        return self.drives_enabled() and self.medulla_alive()
+
+    def write(self, cmd: DriveCommand) -> RawEtherCATFrame:
+        """One output cycle: derive each Elmo's control word from its last status
+        word and the master `enable`, pack the command plus control word into the
+        output PDOs, exchange, and return the fresh input frame. Call every tick.
+
+        The control word is computed from the previous frame's status word (the
+        inherent one-cycle latency), then this cycle's inputs are read back in."""
+        m = self.master
+        f = self._last_frame
+
+        knee_cw = control_word(f.knee_status_word, self.enable)
+        ankle_cw = control_word(f.ankle_status_word, self.enable)
+        m.slaves[KNEE].output = _pack_drive(cmd.knee_velocity_counts, cmd.knee_torque_per_mille, knee_cw)
+        m.slaves[ANKLE].output = _pack_drive(cmd.ankle_velocity_counts, cmd.ankle_torque_per_mille, ankle_cw)
+
+        # The baseline never writes the medulla output PDO (no PDO Transmit targets the
+        # medulla), so we leave it at default -- the medulla does not watchdog a master
+        # heartbeat. We only read its input counter (medulla_alive).
+
+        m.send_processdata()
+        m.receive_processdata(timeout=2000)
+        frame = unpack_frame(
+            bytes(m.slaves[KNEE].input),
+            bytes(m.slaves[ANKLE].input),
+            bytes(m.slaves[MEDULLA].input),
+        )
+        self._ingest(frame)
+        return frame
+
     def close(self) -> None:
         try:
             self.master.state = pysoem.INIT_STATE

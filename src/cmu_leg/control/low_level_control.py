@@ -13,15 +13,19 @@
 # trusts the Elmo CiA 402 state machine to ignore them. This port emits zeros
 # on every drive-facing field the moment control_enabled drops. See docs/arch.md.
 
-from cmu_leg.control.low_level.knee_torque_conditioning import KneeTorqueConditioning
-from cmu_leg.control.low_level.knee_torque_controller import KneeTorqueController
-from cmu_leg.control.low_level.knee_velocity_saturation import KneeVelocitySaturation
-from cmu_leg.control.low_level.ankle_torque_conditioning import AnkleTorqueConditioning
-from cmu_leg.control.low_level.ankle_torque_controller import AnkleTorqueController
-from cmu_leg.control.low_level.ankle_velocity_saturation import AnkleVelocitySaturation
+from cmu_leg.control.low_level.knee import (
+    KneeTorqueConditioning,
+    KneeTorqueController,
+    KneeVelocitySaturation,
+)
+from cmu_leg.control.low_level.ankle import (
+    AnkleTorqueConditioning,
+    AnkleTorqueController,
+    AnkleVelocitySaturation,
+)
 from cmu_leg.types.state import ProsthesisState
-from cmu_leg.types.commands import TorqueDesired, LowLevelOutput
-import cmu_leg.config.params as params
+from cmu_leg.types.commands import TorqueDesired, LowLevelOutput, DriveCommand
+import cmu_leg.config.params as params 
 
 
 class LowLevelControl:
@@ -45,6 +49,22 @@ class LowLevelControl:
         # change this to true once everything is verified as safe to use.
         self._verified = False
 
+        knee = params.KNEE
+        ankle = params.ANKLE
+        # drive command gains 
+         # rad/s -> counts/s   (1 / motor_abs_counts_to_rad)
+        self.knee_velocity_gain = 1.0 / knee.motor_abs_counts_to_rad
+        self.ankle_velocity_gain = 1.0 / ankle.motor_abs_counts_to_rad
+
+        # Nm -> per-mille of rated torque
+        # rated torque at gearbox output = rated_current * torque_constant * gear_ratio
+        self.knee_torque_gain = 1000.0 / (knee.rated_current
+                                          * knee.torque_constant
+                                          * knee.gear_ratio)
+        self.ankle_torque_gain = 1000.0 / (ankle.rated_current
+                                           * ankle.torque_constant
+                                           * ankle.gear_ratio)
+
     # Reset every stateful sub-block. Called on the rising edge of
     # control_enabled to mirror Simulink "StatesWhenEnabling: reset".
     def _reset_sub_blocks(self) -> None:
@@ -55,14 +75,25 @@ class LowLevelControl:
         self.ankle_torque_controller.reset()
         self.ankle_velocity_saturation.reset()
 
-    def compute(self, state: ProsthesisState, desired_torque: TorqueDesired) -> LowLevelOutput:
+    def to_drive_command(self, low_level_output: LowLevelOutput) -> DriveCommand:
+        return DriveCommand(
+                    knee_velocity_counts=int(round(low_level_output.knee_velocity_commanded * self.knee_velocity_gain)),
+                    knee_torque_per_mille=int(round(low_level_output.knee_motor_torque_ff * self.knee_torque_gain)),
+                    ankle_velocity_counts=int(round(low_level_output.ankle_velocity_commanded * self.ankle_velocity_gain)),
+                    ankle_torque_per_mille=int(round(low_level_output.ankle_motor_torque_ff * self.ankle_torque_gain)),
+                )
+
+    def compute(self, state: ProsthesisState, desired_torque: TorqueDesired,
+                control_enabled: bool) -> LowLevelOutput:
 
         if not self._verified:
             raise NotImplementedError("Low Level Control not verified yet!")
 
-        # edge detection
-        rising_edge = state.control_enabled and not self._prev_control_enabled
-        self._prev_control_enabled = state.control_enabled
+        # edge detection. control_enabled is a hardware fact (the Elmos reaching
+        # OPERATION_ENABLED), passed in by the loop from ec.control_enabled() —
+        # not a supervisor flag on the state bus.
+        rising_edge = control_enabled and not self._prev_control_enabled
+        self._prev_control_enabled = control_enabled
 
         if rising_edge:
             self._reset_sub_blocks()
@@ -70,7 +101,7 @@ class LowLevelControl:
 
         # disabled: do NOT run the pipeline, emit zeros to every field
         # (more conservative than Simulink, which holds the last value)
-        if not state.control_enabled:
+        if not control_enabled:
             return LowLevelOutput()
 
         # enabled: run the full pipeline

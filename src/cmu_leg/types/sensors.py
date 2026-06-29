@@ -50,3 +50,16 @@ class IMUFrame:
     thigh_fresh: bool = False  # True if newer than the previous read()
     foot_fresh: bool = False
 
+@dataclass(slots=True)
+class EncoderReadings:
+    """Engineering-unit outputs of the encoder conversion (radians, Nm).
+    Pure function of one RawEtherCATFrame; no temporal state (velocities are
+    derived downstream in the estimator). See estimation/encoders.py.
+    """
+    knee_motor_angle: float = 0.0
+    knee_angle: float = 0.0
+    knee_torque: float = 0.0
+    ankle_motor_angle: float = 0.0
+    ankle_spring_angle: float = 0.0
+    ankle_angle: float = 0.0
+    ankle_torque: float = 0.0

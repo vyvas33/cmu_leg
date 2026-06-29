@@ -19,4 +19,3 @@ class TorqueController(ABC):
     @abstractmethod
     def reset(self, state, time) -> None:
         ...
-5

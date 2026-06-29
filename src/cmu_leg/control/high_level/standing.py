@@ -32,29 +32,26 @@ class StandingController(TorqueController):
             order=standing.vel_lowpass_order,
         )
 
-        self._prev_standing = False
         self._knee_start = 0.0
         self._ankle_start = 0.0
         self._t0 = 0.0
 
     def reset(self, state: ProsthesisState, time: float) -> None:
-        # reset the filters and set prev standing to false as a reset
-        self._prev_standing = False
+        # Called by the orchestrator on the standing rising edge. Latch the
+        # min-jerk start conditions (current angles + start time) so the ramp
+        # begins from where the leg actually is, and reseed the velocity filters
+        # from the current velocities so the first output has no startup transient.
+        self._knee_start = state.knee_angle
+        self._ankle_start = state.ankle_angle
+        self._t0 = time
         self._knee_vel_lowpass.reset(state.knee_velocity)
         self._ankle_vel_lowpass.reset(state.ankle_velocity)
 
     def _compute(self, state: ProsthesisState, time: float) -> TorqueDesired:
-        # always called, so the filters always stay warm
+        # Start conditions were latched in reset() at the standing rising edge;
+        # this just runs the min-jerk ramp + PD every tick.
         knee_velocity = self._knee_vel_lowpass.compute(state.knee_velocity)
         ankle_velocity = self._ankle_vel_lowpass.compute(state.ankle_velocity)
-
-        # at the rising edge, the start conditions are captured and stay the same as long as standing is True
-        if state.standing and not self._prev_standing:
-            self._knee_start = state.knee_angle
-            self._ankle_start = state.ankle_angle
-            self._t0 = time
-
-        self._prev_standing = state.standing # after standing = true, we update prev standing every tick
 
         knee_desired = min_jerk(self._knee_start, self._knee_target, self._t0, self._duration, time)
         ankle_desired = min_jerk(self._ankle_start, self._ankle_target, self._t0, self._duration, time)

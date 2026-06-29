@@ -2,6 +2,13 @@ from dataclasses import dataclass
 
 @dataclass
 class ProsthesisState:
+    """The control bus. Two writers with disjoint field ownership:
+      - physical fields (angles/velocities/torques/grf/kinematics) — written by
+        the StateEstimator from sensors.
+      - mode fields (below) — written by the supervisor, NOT the estimator.
+    `stance`/swing is deliberately NOT here: it lives inside the walking
+    controller and never leaves it.
+    """
     hip_angle: float = 0.0
     hip_velocity: float = 0.0
     hip_accel: float = 0.0
@@ -40,19 +47,12 @@ class ProsthesisState:
     grf_R: float = 0.0
     grf_L: float = 0.0
 
-    #derived from kinematics 
+    #derived from kinematics
     leg_angle: float = 0.0
     leg_angle_velocity: float = 0.0
     leg_length: float = 0.0
 
-    stance: bool = False
+    # mode fields — supervisor-owned (TBD who sets it), read by high-level
+    # selection/edge and by knee conditioning.
     standing: bool = False
-    zero_torque: bool = False
-    control_enabled: bool = False
-    initializing: bool = False
-
-    vicon_sync: bool = False #need to confirm this
-
-
-
 

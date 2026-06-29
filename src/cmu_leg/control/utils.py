@@ -1,5 +1,5 @@
 from scipy.signal import butter, sosfilt, sosfilt_zi
-
+from cmu_leg.config.params import COMMON
 
 class Lowpass:
     def __init__(self,
@@ -23,13 +23,8 @@ class Lowpass:
         y, self._zi = sosfilt(self._sos, [u], zi=self._zi)
         return float(y[0])
 
-
-# Backward-difference derivative, one sample of state.
-# Matches Simulink's Discrete Derivative block:
-#   - first tick returns 0 (delay state initialized to current input)
-#   - subsequent ticks: y[k] = (u[k] - u[k-1]) / Ts
 class BackwardDifference:
-    def __init__(self, sample_time: float = 0.001):
+    def __init__(self, sample_time: float = COMMON.sample_time):
         self._Ts = sample_time
         self._u_prev: float | None = None
 

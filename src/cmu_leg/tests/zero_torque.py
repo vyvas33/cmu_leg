@@ -8,6 +8,10 @@ write-side counterpart to the read-only utility/ loggers.
 
   uv run python -m cmu_leg.tests.zero_torque
 
+  OR
+  
+  sudo /home/cmuleg/cmu_leg/.venv/bin/python src/cmu_leg/tests/zero_torque.py
+
 !!! SAFETY -- read before running !!!
   * Leg ON A STAND, e-stop in hand. This script ENERGIZES the motors.
   * Runtime mode is CSV (Cyclic Sync Velocity). A zero command means

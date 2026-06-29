@@ -3,6 +3,8 @@ Read and plot the encoder-derived prosthesis state.
 
 Usage:
 uv run python -m cmu_leg.utility.read_encoders
+sudo .venv/bin/python -m cmu_leg.utility.read_encoders
+
 """
 
 import time
@@ -18,7 +20,7 @@ from cmu_leg.types.sensors import IMUFrame
 from cmu_leg.utility.utils import make_run_dir
 from cmu_leg.utility.recorder import Recorder
 
-DURATION = 20.0  # seconds
+DURATION = 40.0  # seconds
 
 def _plot(title, t, series, ylabel, out, fname):
     fig, ax = plt.subplots(figsize=(11, 5))
@@ -38,6 +40,7 @@ def _plot_idle(t, idle_ms, out):
     ax.plot(t, idle_ms, linewidth=0.7)
     ax.set_title("Loop idle time", fontweight="bold")
     ax.set_xlabel("loop time [s]"); ax.set_ylabel("idle [ms]")
+    ax.axhline(0, color="red", linewidth=0.8, linestyle="--", label="overrun")
     ax.legend(); ax.grid(alpha=0.3)
     fig.tight_layout()
     png = out / "loop_idle.png"

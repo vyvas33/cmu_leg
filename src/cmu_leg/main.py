@@ -29,7 +29,7 @@ from cmu_leg.utility.recorder import Recorder
 PERIOD = COMMON.sample_time
 WARM_UP_TIME = 1.0 #secs
 ENABLE_TIME = 5.0 #secs
-STANDING_DURATION = STANDING.duration + 1.0
+STANDING_DURATION = STANDING.duration + 2.0
 SHUTDOWN_TIME = 1.0 #secs
 
 def main():

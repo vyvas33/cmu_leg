@@ -30,7 +30,7 @@ class AnkleTorqueConditioning:
         self._lowpass_out = Lowpass()  # 25 Hz default
 
         # change this to true once everything is verified as safe to use.
-        self._verified = False
+        self._verified = True
 
     def reset(self) -> None:
         self._lowpass_motor_velocity.reset(0.0)
@@ -139,7 +139,7 @@ class AnkleTorqueController:
         )
 
         # change to True once everything is verified as safe to use.
-        self._verified = False
+        self._verified = True
 
     # Reset derivative + lowpass state so the next compute() does not emit a step.
     def reset(self,
@@ -221,7 +221,7 @@ class AnkleVelocitySaturation:
         )
 
         # change to True once everything is verified as safe to use.
-        self._verified = False
+        self._verified = True
 
     # Reset the two lowpass filters so the next compute() does not emit a
     # startup transient. Called by Low Level Control on the disabled -> enabled

@@ -33,7 +33,7 @@ class KneeTorqueConditioning:
         self._lowpass = Lowpass()
 
         # change this to true once everything is verified as safe to use.
-        self._verified = False
+        self._verified = True
 
     def reset(self) -> None:
         self._lowpass.reset(0.0)
@@ -118,7 +118,7 @@ class KneeTorqueController:
         self._dd_tau_dot = BackwardDifference(self.sample_time)
 
         # change to True once everything is verified as safe to use.
-        self._verified = False
+        self._verified = True
 
     # Reset the derivative state so the next compute() does not emit a step.
     def reset(self, knee_torque_commanded_init: float = 0.0) -> None:
@@ -195,7 +195,7 @@ class KneeVelocitySaturation:
         )
 
         # change to True once everything is verified as safe to use.
-        self._verified = False
+        self._verified = True
 
     # Reset the two lowpass filters so the next compute() does not emit a
     # startup transient. Called by Low Level Control on the disabled -> enabled

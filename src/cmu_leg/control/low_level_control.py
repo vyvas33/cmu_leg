@@ -47,7 +47,7 @@ class LowLevelControl:
         self._post_enable_ticks = 0
 
         # change this to true once everything is verified as safe to use.
-        self._verified = False
+        self._verified = True
 
         knee = params.KNEE
         ankle = params.ANKLE

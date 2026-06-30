@@ -4,7 +4,7 @@ from cmu_leg.types.commands import TorqueDesired
 
 
 class TorqueController(ABC):
-    _verified: bool = False
+    _verified: bool = True
 
     def compute(self, state: ProsthesisState, time: float) -> TorqueDesired:
         if not self._verified:

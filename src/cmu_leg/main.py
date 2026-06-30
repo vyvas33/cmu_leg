@@ -27,7 +27,7 @@ from cmu_leg.utility.utils import make_run_dir
 from cmu_leg.utility.recorder import Recorder
 
 PERIOD = COMMON.sample_time
-WARM_UP_TIME = 1.0 #secs
+WARM_UP_TIME = 5.0 #secs
 ENABLE_TIME = 5.0 #secs
 STANDING_DURATION = STANDING.duration + 2.0
 SHUTDOWN_TIME = 1.0 #secs
@@ -43,8 +43,8 @@ def main():
     pc = ProsthesisControl()
     llc = LowLevelControl()
     
-    state_log, torque_log, out_log, drive_log = (
-    Recorder("state"), Recorder("torque"), Recorder("lowlevel"), Recorder("drive"))
+    state_log, torque_log, out_log, drive_log, idle_time_log= (
+    Recorder("state"), Recorder("torque"), Recorder("lowlevel"), Recorder("drive"), Recorder("idle_time"))
 
     t0 = time.perf_counter()
     clk = t0
@@ -57,9 +57,10 @@ def main():
         phase_start = time.perf_counter() - t0
         while (t := time.perf_counter() - t0) - phase_start < duration:
             clk += PERIOD
-            state = se.get_state(frame, IMUFrame(), t)
+            t_ctrl = clk - t0   # ideal uniform time, no OS jitter
+            state = se.get_state(frame, IMUFrame(), t_ctrl)
             state.standing = standing
-            desired_torque = pc.compute(state, t)
+            desired_torque = pc.compute(state, t_ctrl)
             llo = llc.compute(state, desired_torque=desired_torque,control_enabled=ec.control_enabled())
             drive_cmd = llc.to_drive_command(llo)
             frame = ec.write(drive_cmd)                       
@@ -101,18 +102,13 @@ def main():
         finally:
             ec.close()
             run_dir = make_run_dir("standing")
-            for lg in (state_log, torque_log, out_log, drive_log):
+            for lg in (state_log, torque_log, out_log, drive_log, idle_time_log):
                 lg.save(run_dir)
 
         
 
-
-
-        
-
-
-
-
+if __name__ == "__main__":
+    main()
 
 
 

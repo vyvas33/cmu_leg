@@ -19,6 +19,8 @@ from cmu_leg.hardware.ethercat_io import EtherCATInterface
 from cmu_leg.types.sensors import IMUFrame
 from cmu_leg.utility.utils import make_run_dir
 from cmu_leg.utility.recorder import Recorder
+from cmu_leg.control.utils import Lowpass
+from cmu_leg.config.params import STANDING, COMMON
 
 DURATION = 40.0  # seconds
 
@@ -57,10 +59,17 @@ def main():
     t_log = []
     idle_log = []                    # per-iteration loop slack (ms), timing diagnosis
     knee_ang = {"motor": [], "joint": []}
-    knee_vel = {"motor": [], "joint": []}
+    knee_vel = {"motor": [], "joint": [], "joint filt": []}
     ankle_ang = {"motor": [], "spring": [], "joint": []}
-    ankle_vel = {"motor": [], "spring": [], "joint": []}
+    ankle_vel = {"motor": [], "spring": [], "joint": [], "joint filt": []}
     torque = {"knee": [], "ankle": []}
+
+    # Mirror the standing controller's velocity lowpass (STANDING cutoffs/order)
+    # so the "joint filt" trace is exactly the velocity the controller acts on.
+    knee_vel_lp = Lowpass(cutoff_freq=STANDING.knee_vel_lowpass_cutoff,
+                          sample_rate=COMMON.sample_rate, order=STANDING.vel_lowpass_order)
+    ankle_vel_lp = Lowpass(cutoff_freq=STANDING.ankle_vel_lowpass_cutoff,
+                           sample_rate=COMMON.sample_rate, order=STANDING.vel_lowpass_order)
 
     period = 0.001   # target loop period (s) -> ~1 kHz
     t0 = time.perf_counter()
@@ -76,6 +85,7 @@ def main():
             knee_ang["joint"].append(degrees(s.knee_angle))
             knee_vel["motor"].append(degrees(s.knee_motor_velocity))
             knee_vel["joint"].append(degrees(s.knee_velocity))
+            knee_vel["joint filt"].append(degrees(knee_vel_lp.compute(s.knee_velocity)))
 
             ankle_ang["motor"].append(degrees(s.ankle_motor_angle))
             ankle_ang["spring"].append(degrees(s.ankle_spring_angle))
@@ -83,6 +93,7 @@ def main():
             ankle_vel["motor"].append(degrees(s.ankle_motor_velocity))
             ankle_vel["spring"].append(degrees(s.ankle_spring_velocity))
             ankle_vel["joint"].append(degrees(s.ankle_velocity))
+            ankle_vel["joint filt"].append(degrees(ankle_vel_lp.compute(s.ankle_velocity)))
 
             torque["knee"].append(s.knee_torque_measured)
             torque["ankle"].append(s.ankle_torque_measured)

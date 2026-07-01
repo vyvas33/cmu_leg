@@ -20,7 +20,7 @@ from cmu_leg.control.low_level_control import LowLevelControl
 # data types
 from cmu_leg.types.state import ProsthesisState
 from cmu_leg.types.sensors import IMUFrame   # standing is encoder-only; pass an empty frame
-
+from cmu_leg.types.commands import DriveCommand
 from cmu_leg.config.params import COMMON, STANDING
 
 # logging output dir (post-loop dump)
@@ -63,7 +63,10 @@ def main():
             state.standing = standing
             desired_torque = pc.compute(state, t_ctrl)
             llo = llc.compute(state, desired_torque=desired_torque,control_enabled=ec.control_enabled())
-            drive_cmd = llc.to_drive_command(llo)
+            if standing:
+                drive_cmd = llc.to_drive_command(llo)
+            else:
+                drive_cmd = DriveCommand()
             frame = ec.write(drive_cmd)                       
             idle = clk - time.perf_counter()
 

@@ -9,6 +9,7 @@ sudo .venv/bin/python -m cmu_leg.utility.read_encoders
 
 import time
 from math import degrees
+import gc
 
 import matplotlib
 matplotlib.use("Agg")
@@ -22,7 +23,7 @@ from cmu_leg.utility.recorder import Recorder
 from cmu_leg.control.utils import Lowpass
 from cmu_leg.config.params import STANDING, COMMON
 
-DURATION = 40.0  # seconds
+DURATION = 20.0  # seconds
 
 def _plot(title, t, series, ylabel, out, fname):
     fig, ax = plt.subplots(figsize=(11, 5))
@@ -74,6 +75,9 @@ def main():
     period = 0.001   # target loop period (s) -> ~1 kHz
     t0 = time.perf_counter()
     clk = t0
+    gc.collect()
+    gc.freeze()
+    gc.disable()
     try:
         while (t := time.perf_counter() - t0) < DURATION:
             clk += period
@@ -106,6 +110,7 @@ def main():
     except KeyboardInterrupt:
         print("terminated early")
     finally:
+        gc.enable()
         ec.close()
 
     out = make_run_dir("read_encoders")

@@ -6,6 +6,7 @@ Usage:
 """
 
 import time
+import gc
 
 # hardware boundary
 from cmu_leg.hardware.ethercat_io import EtherCATInterface
@@ -75,7 +76,9 @@ def main():
             if idle > 0:
                 time.sleep(idle)
 
-
+    gc.collect()
+    gc.freeze()
+    gc.disable()
     try:
         # enable is False
         print("Warming up......")
@@ -95,7 +98,7 @@ def main():
         print("terminated early")
 
     finally:
-        
+        gc.enable()
         ec.enable = False
         try:
             run(SHUTDOWN_TIME)

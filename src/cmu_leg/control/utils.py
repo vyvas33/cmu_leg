@@ -3,6 +3,14 @@ from cmu_leg.config.params import COMMON
 import collections
 import statistics
 
+
+def clamp(x: float, lo: float, up: float) -> float:
+    """Scalar saturation. Same result as np.clip(x, lo, up) in all orderings
+    (np.clip is min(max(x, lo), up) internally), but keeps native floats and
+    allocates nothing -- np.clip on a scalar returns a numpy float64 that then
+    slows every downstream arithmetic op. Cheap enough for the 1 kHz loop."""
+    return min(max(x, lo), up)
+
 class Lowpass:
     """Butterworth lowpass as a scalar biquad cascade (transposed direct-form II).
 

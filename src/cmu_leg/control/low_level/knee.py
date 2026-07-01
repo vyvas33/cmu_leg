@@ -4,11 +4,9 @@ reset, matching the nm_nn_swing Knee subsystems. Kept as separate classes in one
 file so the per-stage verification/reset boundaries stay intact.
 """
 
-import numpy as np
-
 import cmu_leg.config.params as params
 from cmu_leg.config.params import KneeParams, CommonParams
-from cmu_leg.control.utils import Lowpass, BackwardDifference
+from cmu_leg.control.utils import Lowpass, BackwardDifference, clamp
 from cmu_leg.types.commands import TorqueDesired
 from cmu_leg.types.state import ProsthesisState
 
@@ -89,7 +87,7 @@ class KneeTorqueConditioning:
 
     def _torque_saturation(self, torque_input, lo, up):
 
-        return np.clip(torque_input, lo, up)
+        return clamp(torque_input, lo, up)
 
 
 # Knee torque controller. Reads from prosthesis state and the commanded torque
@@ -222,10 +220,10 @@ class KneeVelocitySaturation:
         torque_upper = 0.0 if flexion_violation else self.knee_torque_max
         torque_lower = 0.0 if extension_violation else -self.knee_torque_max
 
-        velocity_saturated = np.clip(knee_velocity_desired,
-                                     velocity_lower, velocity_upper)
-        torque_ff_saturated = np.clip(knee_motor_torque_ff_desired,
-                                      torque_lower, torque_upper)
+        velocity_saturated = clamp(knee_velocity_desired,
+                                   velocity_lower, velocity_upper)
+        torque_ff_saturated = clamp(knee_motor_torque_ff_desired,
+                                    torque_lower, torque_upper)
 
         knee_velocity_commanded = self._lowpass_velocity.compute(velocity_saturated)
         knee_motor_torque_ff = self._lowpass_torque_ff.compute(torque_ff_saturated)

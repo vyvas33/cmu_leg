@@ -24,7 +24,7 @@ def _wrap_counts(counts: int, total: int) -> int:
     """Wrap absolute counts into [-total/2, total/2)."""
     return counts - total * floor((counts + total / 2) / total)
 
-def convert_encoders(frame: RawEtherCATFrame) -> EncoderReadings:
+def convert_encoders(frame: RawEtherCATFrame, ankle_median=None) -> EncoderReadings:
     knee_motor_angle = KNEE.motor_abs_counts_to_rad * (frame.knee_motor_counts - ENCODERS.knee_motor_abs_counts_offset)
 
     # knee joint angle
@@ -40,8 +40,11 @@ def convert_encoders(frame: RawEtherCATFrame) -> EncoderReadings:
     ankle_motor_angle = ANKLE.motor_abs_counts_to_rad * (frame.ankle_motor_counts - ENCODERS.ankle_motor_abs_counts_offset)
 
     awc = _wrap_counts(frame.ankle_joint_counts, ENCODER_CORRECTION.ankle_total_counts)
+    if ankle_median is not None:
+        awc = ankle_median.compute(awc)
+    # median filter should come here
     ac = awc - ENCODERS.ankle_abs_counts_offset
-    ankle_angle = ENCODERS.ankle_abs_counts_to_rad * ac
+    ankle_angle = ENCODERS.ankle_abs_counts_to_rad * ac - ANKLE.angle_offset
 
     # ankle spring angle
     spring_lin = _polyval(ENCODER_CORRECTION.ankle_spring_counts_to_rad_poly, ac)

@@ -7,6 +7,7 @@ from cmu_leg.types.sensors import RawEtherCATFrame
 from cmu_leg.types.sensors import IMUFrame
 from cmu_leg.estimation.encoders import convert_encoders
 from cmu_leg.control.utils import BackwardDifference
+from cmu_leg.control.utils import MedianFilter
 
 class StateEstimator:
     def __init__(self):
@@ -16,6 +17,7 @@ class StateEstimator:
         self._ankle_motor_vel = BackwardDifference()
         self._ankle_spring_vel = BackwardDifference() ##this needs to be discussed
         self.state = ProsthesisState()
+        self._ankle_median = MedianFilter()
 
 
     def get_state(self, frame: RawEtherCATFrame, imu: IMUFrame, t) -> ProsthesisState:
@@ -25,7 +27,7 @@ class StateEstimator:
 
 
     def _apply_encoders(self, frame: RawEtherCATFrame):
-        enc_read = convert_encoders(frame=frame)
+        enc_read = convert_encoders(frame=frame, ankle_median=self._ankle_median)
 
         knee_angle = enc_read.knee_angle
         knee_motor_angle = enc_read.knee_motor_angle

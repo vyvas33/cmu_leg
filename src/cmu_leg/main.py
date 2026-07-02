@@ -33,6 +33,9 @@ ENABLE_TIME = 5.0 #secs
 STANDING_DURATION = STANDING.duration + 2.0
 SHUTDOWN_TIME = 1.0 #secs
 
+# Ankle disabled for this run
+DISABLE_ANKLE = True
+
 def main():
 
     # hardware bringup
@@ -60,15 +63,19 @@ def main():
             clk += PERIOD
             t_ctrl = clk - t0   # ideal uniform time, no OS jitter
             state = se.get_state(frame, IMUFrame(), t_ctrl)
+            frame_log.append(t, frame)   # raw PDO that produced this state (ankle-encoder diagnosis)
             state.standing = standing
             desired_torque = pc.compute(state, t_ctrl)
             llo = llc.compute(state, desired_torque=desired_torque,control_enabled=ec.control_enabled())
             # only send non zero commands if standing is true, else send zeros, as even a small bias in measured torque can poison the low level controller.
             if standing:
                 drive_cmd = llc.to_drive_command(llo)
+                if DISABLE_ANKLE:
+                    drive_cmd.ankle_velocity_counts = 0
+                    drive_cmd.ankle_torque_per_mille = 0
             else:
                 drive_cmd = DriveCommand()
-            frame = ec.write(drive_cmd)                       
+            frame = ec.write(drive_cmd)
             idle = clk - time.perf_counter()
 
             state_log.append(t, state); torque_log.append(t, desired_torque); out_log.append(t, llo); drive_log.append(t, drive_cmd)

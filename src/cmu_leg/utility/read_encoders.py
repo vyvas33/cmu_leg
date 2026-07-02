@@ -56,21 +56,15 @@ def main():
     se = StateEstimator()
     print(f"Recording for {DURATION} seconds")
 
-    rec = Recorder("state")          # full ProsthesisState per tick -> state.csv
-    t_log = []
+    state_rec = Recorder("state")    # full ProsthesisState per tick -> state.csv
+    frame_rec = Recorder("frame")    # raw EtherCAT PDO per tick   -> frame.csv
     idle_log = []                    # per-iteration loop slack (ms), timing diagnosis
-    knee_ang = {"motor": [], "joint": []}
-    knee_vel = {"motor": [], "joint": [], "joint filt": []}
-    ankle_ang = {"motor": [], "spring": [], "joint": []}
-    ankle_vel = {"motor": [], "spring": [], "joint": [], "joint filt": []}
-    torque = {"knee": [], "ankle": []}
 
-    # Mirror the standing controller's velocity lowpass (STANDING cutoffs/order)
-    # so the "joint filt" trace is exactly the velocity the controller acts on.
     knee_vel_lp = Lowpass(cutoff_freq=STANDING.knee_vel_lowpass_cutoff,
                           sample_rate=COMMON.sample_rate, order=STANDING.vel_lowpass_order)
     ankle_vel_lp = Lowpass(cutoff_freq=STANDING.ankle_vel_lowpass_cutoff,
                            sample_rate=COMMON.sample_rate, order=STANDING.vel_lowpass_order)
+    knee_vel_filt, ankle_vel_filt = [], []
 
     period = 0.001   # target loop period (s) -> ~1 kHz
     t0 = time.perf_counter()
@@ -81,26 +75,12 @@ def main():
     try:
         while (t := time.perf_counter() - t0) < DURATION:
             clk += period
-            s = se.get_state(ec.read(), IMUFrame(), t)   # encoder-only; empty IMU frame
-            rec.append(t, s)
-            t_log.append(t)
-
-            knee_ang["motor"].append(degrees(s.knee_motor_angle))
-            knee_ang["joint"].append(degrees(s.knee_angle))
-            knee_vel["motor"].append(degrees(s.knee_motor_velocity))
-            knee_vel["joint"].append(degrees(s.knee_velocity))
-            knee_vel["joint filt"].append(degrees(knee_vel_lp.compute(s.knee_velocity)))
-
-            ankle_ang["motor"].append(degrees(s.ankle_motor_angle))
-            ankle_ang["spring"].append(degrees(s.ankle_spring_angle))
-            ankle_ang["joint"].append(degrees(s.ankle_angle))
-            ankle_vel["motor"].append(degrees(s.ankle_motor_velocity))
-            ankle_vel["spring"].append(degrees(s.ankle_spring_velocity))
-            ankle_vel["joint"].append(degrees(s.ankle_velocity))
-            ankle_vel["joint filt"].append(degrees(ankle_vel_lp.compute(s.ankle_velocity)))
-
-            torque["knee"].append(s.knee_torque_measured)
-            torque["ankle"].append(s.ankle_torque_measured)
+            raw = ec.read()
+            s = se.get_state(raw, IMUFrame(), t)   # encoder-only; empty IMU frame
+            state_rec.append(t, s)
+            frame_rec.append(t, raw)               # raw counts + Medulla timestamps
+            knee_vel_filt.append(degrees(knee_vel_lp.compute(s.knee_velocity)))
+            ankle_vel_filt.append(degrees(ankle_vel_lp.compute(s.ankle_velocity)))
 
             # sleep only the time left in this period
             idle = clk - time.perf_counter()
@@ -114,13 +94,32 @@ def main():
         ec.close()
 
     out = make_run_dir("read_encoders")
-    rec.save(out)
-    _plot("Knee angles", t_log, knee_ang, "angle [deg]", out, "knee_angles.png")
-    _plot("Knee velocities", t_log, knee_vel, "velocity [deg/s]", out, "knee_velocities.png")
-    _plot("Ankle angles", t_log, ankle_ang, "angle [deg]", out, "ankle_angles.png")
-    _plot("Ankle velocities", t_log, ankle_vel, "velocity [deg/s]", out, "ankle_velocities.png")
-    _plot("Measured joint torques", t_log, torque, "torque [Nm]", out, "torques.png")
-    _plot_idle(t_log, idle_log, out)
+    state_rec.save(out)
+    frame_rec.save(out)
+
+    # Build plot series straight from the recorded columns 
+    t = state_rec.column("t")
+    deg = lambda name: [degrees(v) for v in state_rec.column(name)]
+    _plot("Knee angles", t,
+          {"motor": deg("knee_motor_angle"), "joint": deg("knee_angle")},
+          "angle [deg]", out, "knee_angles.png")
+    _plot("Knee velocities", t,
+          {"motor": deg("knee_motor_velocity"), "joint": deg("knee_velocity"),
+           "joint filt": knee_vel_filt},
+          "velocity [deg/s]", out, "knee_velocities.png")
+    _plot("Ankle angles", t,
+          {"motor": deg("ankle_motor_angle"), "spring": deg("ankle_spring_angle"),
+           "joint": deg("ankle_angle")},
+          "angle [deg]", out, "ankle_angles.png")
+    _plot("Ankle velocities", t,
+          {"motor": deg("ankle_motor_velocity"), "spring": deg("ankle_spring_velocity"),
+           "joint": deg("ankle_velocity"), "joint filt": ankle_vel_filt},
+          "velocity [deg/s]", out, "ankle_velocities.png")
+    _plot("Measured joint torques", t,
+          {"knee": state_rec.column("knee_torque_measured"),
+           "ankle": state_rec.column("ankle_torque_measured")},
+          "torque [Nm]", out, "torques.png")
+    _plot_idle(t, idle_log, out)
 
 if __name__ == "__main__":
     main()

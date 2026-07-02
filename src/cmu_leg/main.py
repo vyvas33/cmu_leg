@@ -44,8 +44,8 @@ def main():
     pc = ProsthesisControl()
     llc = LowLevelControl()
     
-    state_log, torque_log, out_log, drive_log, idle_time_log= (
-    Recorder("state"), Recorder("torque"), Recorder("lowlevel"), Recorder("drive"), Recorder("idle_time"))
+    state_log, torque_log, out_log, drive_log, idle_time_log, frame_log= (
+    Recorder("state"), Recorder("torque"), Recorder("lowlevel"), Recorder("drive"), Recorder("idle_time"), Recorder("frame"))
 
     t0 = time.perf_counter()
     clk = t0
@@ -63,6 +63,7 @@ def main():
             state.standing = standing
             desired_torque = pc.compute(state, t_ctrl)
             llo = llc.compute(state, desired_torque=desired_torque,control_enabled=ec.control_enabled())
+            # only send non zero commands if standing is true, else send zeros, as even a small bias in measured torque can poison the low level controller.
             if standing:
                 drive_cmd = llc.to_drive_command(llo)
             else:
@@ -108,7 +109,7 @@ def main():
         finally:
             ec.close()
             run_dir = make_run_dir("standing")
-            for lg in (state_log, torque_log, out_log, drive_log, idle_time_log):
+            for lg in (state_log, torque_log, out_log, drive_log, idle_time_log, frame_log):
                 lg.save(run_dir)
 
         

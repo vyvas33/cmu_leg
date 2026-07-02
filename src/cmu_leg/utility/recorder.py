@@ -35,6 +35,14 @@ class Recorder:
             self._cols = ["t", *flat.keys()]
         self._rows.append([t, *flat.values()])
 
+    def column(self, name: str) -> list:
+        """Return one recorded column by name, for post-loop plotting. `name` is
+        `t` or any flattened field (e.g. `ankle_angle`, `thigh_acc_0`)."""
+        if self._cols is None:
+            return []
+        i = self._cols.index(name)
+        return [row[i] for row in self._rows]
+
     def save(self, out_dir) -> Path | None:
         if self._cols is None:
             return None   # nothing was recorded

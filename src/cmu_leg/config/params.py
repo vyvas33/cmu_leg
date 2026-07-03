@@ -220,7 +220,9 @@ ANKLE = AnkleParams(
     motor_abs_counts_to_rad=2.0 * pi / (2 ** 30),
     stiffness=993.8613,
     stiffness_poly=(1080.4, -6216.5),
-    angle_offset=0.0444,
+    # 0 to match NPC params.m (ankle_angle_offset.mat load is commented out
+    # there; the Sep-2025 zeroing assumes no extra offset). Old value: 0.0444.
+    angle_offset=0.0,
     kp=0.08,
     angle_min=-30.0 * pi / 180.0,
     angle_min_soft=-20.0 * pi / 180.0,
@@ -237,15 +239,18 @@ ANKLE = AnkleParams(
     torque_ctrl_spring_vel_lowpass_order=2,
 )
 
+# Offsets from prosthesis_control_NPC/utility_functions/spring_zero_positions.mat
+# (23-Sep-2025 zeroing); counts_to_rad from encoder_counts_to_rad_polys.mat
+# (Feb 2024). Previous values were the 2022 baseline_controller calibration.
 ENCODERS = EncoderParams(
-    knee_abs_counts_to_rad=-1.481916095218253e-08,   # verified (read_encoders); NOT 2pi/2^17
+    knee_abs_counts_to_rad=-1.4817901340709475e-08,  # empirical; NOT 2pi/2^17
     ankle_abs_counts_to_rad=2.0 * pi / (2 ** 17),
-    knee_abs_counts_offset=234_149_441,
-    ankle_abs_counts_offset=-553,
-    knee_motor_abs_counts_offset=-2_635,
-    ankle_motor_abs_counts_offset=-951,
-    hall_0_offset=1_738,
-    hall_1_offset=2_261,
+    knee_abs_counts_offset=233_217_932,
+    ankle_abs_counts_offset=-463,
+    knee_motor_abs_counts_offset=2_829_546,
+    ankle_motor_abs_counts_offset=-9,
+    hall_0_offset=197,
+    hall_1_offset=217,
 )
 
 IMU = IMUParams(
@@ -258,18 +263,25 @@ IMU = IMUParams(
     gyro_range_dps=2000,
 )
 
+# From prosthesis_control_NPC/utility_functions/encoder_counts_to_rad_polys.mat
+# (Feb 2024) — the set paired with the Sep-2025 zero offsets above. Polys,
+# means and stds must always come from the same .mat as each other.
 ENCODER_CORRECTION = EncoderCorrection(
-    knee_counts_mean=-49_248_866.40327176,
-    knee_counts_std=33_291_983.071372624,
-    knee_err_poly=(0.47774077, -0.38791886, -0.80362217, 0.50741695),
-    knee_err_mean=-6.0769758202966855e-06,
-    knee_err_std=0.00037360483505769084,
-    ankle_spring_counts_to_rad_poly=(-1.27664165e-15, 2.81074451e-10, 4.75918169e-05, 0.0),
-    ankle_spring_counts_mean=-1248.7238249778297,
-    ankle_spring_counts_std=7852.009105751588,
-    ankle_spring_err_poly=(2.37075304, -0.26480173, -4.05764862, -0.08075658, 0.56996956),
-    ankle_spring_err_mean=-0.00038694562088488905,
-    ankle_spring_err_std=0.0008505143990917394,
+    knee_counts_mean=-45_904_738.257438816,
+    knee_counts_std=37_310_443.63765212,
+    knee_err_poly=(0.05548087522230831, -1.1104694633610175,
+                   0.09695060250841925, 0.9138964820829386),
+    knee_err_mean=0.00020196764386727568,
+    knee_err_std=0.0003709472820373927,
+    ankle_spring_counts_to_rad_poly=(3.6598573670211066e-15, 2.4092807648254984e-10,
+                                     4.738107395479765e-05, 0.0),
+    ankle_spring_counts_mean=91.98335817656937,
+    ankle_spring_counts_std=5797.450564709744,
+    ankle_spring_err_poly=(2.0472565773960527, -0.6925316761570832,
+                           -3.369650930587924, 0.593056076788454,
+                           0.6740383730007847),
+    ankle_spring_err_mean=-0.0004594550864598505,
+    ankle_spring_err_std=0.0006921761420068215,
     ankle_total_counts=2 ** 17,
 )
 

@@ -245,10 +245,10 @@ ANKLE = AnkleParams(
 ENCODERS = EncoderParams(
     knee_abs_counts_to_rad=-1.4817901340709475e-08,  # empirical; NOT 2pi/2^17
     ankle_abs_counts_to_rad=2.0 * pi / (2 ** 17),
-    knee_abs_counts_offset=233_217_932,
-    ankle_abs_counts_offset=-463,
-    knee_motor_abs_counts_offset=2_829_546,
-    ankle_motor_abs_counts_offset=-9,
+    knee_abs_counts_offset=234_361_752,
+    ankle_abs_counts_offset=-428,
+    knee_motor_abs_counts_offset=-54,
+    ankle_motor_abs_counts_offset=-2_328,
     hall_0_offset=197,
     hall_1_offset=217,
 )

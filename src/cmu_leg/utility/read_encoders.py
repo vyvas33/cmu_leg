@@ -3,8 +3,7 @@ Read and plot the encoder-derived prosthesis state.
 
 Usage:
 uv run python -m cmu_leg.utility.read_encoders
-sudo .venv/bin/python -m cmu_leg.utility.read_encoders
-
+c
 """
 
 import time
@@ -23,7 +22,7 @@ from cmu_leg.utility.recorder import Recorder
 from cmu_leg.control.utils import Lowpass
 from cmu_leg.config.params import STANDING, COMMON
 
-DURATION = 20.0  # seconds
+DURATION = 10.0  # seconds
 
 def _plot(title, t, series, ylabel, out, fname):
     fig, ax = plt.subplots(figsize=(11, 5))

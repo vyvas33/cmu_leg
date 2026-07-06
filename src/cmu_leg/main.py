@@ -34,7 +34,7 @@ STANDING_DURATION = STANDING.duration + 2.0
 SHUTDOWN_TIME = 1.0 #secs
 
 # Ankle disabled for this run
-DISABLE_ANKLE = True
+DISABLE_ANKLE = False
 
 def main():
 

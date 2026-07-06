@@ -12,7 +12,7 @@ vkalva, June 2026
 import struct
 import pysoem
 from cmu_leg.types.sensors import RawEtherCATFrame
-from cmu_leg.types.commands import DriveCommand
+from cmu_leg.types.commands import DriveCommand, PositionCommand
 from cmu_leg.hardware.elmos.state_machine import drive_state, DriveState, control_word
 
 KNEE, ANKLE, MEDULLA = 0, 1, 2 # slave indices on the EtherCAT Chain
@@ -62,6 +62,14 @@ def _pack_drive(velocity_counts: int, torque_per_mille: int, cw: int) -> bytes:
     struct.pack_into("<h", buf, 16, torque_per_mille)  # 0x60b2 Torque Offset
     struct.pack_into("<H", buf, 18, cw)                 # 0x6040 Control word
     struct.pack_into("<b", buf, 20, 9)                  # 0x6060 Mode of operation = CSV
+    return bytes(buf)
+
+def _pack_drive_pos(position_counts: int, cw: int) -> bytes:
+    """Pack one Elmo's 24-byte output PDO. Mode is fixed to CSP (8)."""
+    buf = bytearray(24)
+    struct.pack_into("<i", buf, 0, position_counts)     # 0x607A Position
+    struct.pack_into("<H", buf, 18, cw)                 # 0x6040 Control word
+    struct.pack_into("<b", buf, 20, 8)                  #  Mode of operation = CSP
     return bytes(buf)
 
 # Elmo PDO assignment (see README): RxPDOs -> SM2 (0x1C12), TxPDOs -> SM3 (0x1C13).
@@ -219,6 +227,35 @@ class EtherCATInterface:
         self._ingest(frame)
         return frame
 
+    def write_pos(self, cmd: PositionCommand) -> RawEtherCATFrame:
+        """One output cycle: derive each Elmo's control word from its last status
+        word and the master `enable`, pack the command plus control word into the
+        output PDOs, exchange, and return the fresh input frame. Call every tick.
+
+        The control word is computed from the previous frame's status word (the
+        inherent one-cycle latency), then this cycle's inputs are read back in."""
+        m = self.master
+        f = self._last_frame
+
+        knee_cw = control_word(f.knee_status_word, self.enable)
+        ankle_cw = control_word(f.ankle_status_word, self.enable)
+        m.slaves[KNEE].output = _pack_drive_pos(cmd.knee_position_counts, knee_cw)
+        m.slaves[ANKLE].output = _pack_drive_pos(cmd.ankle_position_counts, ankle_cw)
+
+        # The baseline never writes the medulla output PDO (no PDO Transmit targets the
+        # medulla), so we leave it at default -- the medulla does not watchdog a master
+        # heartbeat. We only read its input counter (medulla_alive).
+
+        m.send_processdata()
+        m.receive_processdata(timeout=2000)
+        frame = unpack_frame(
+            bytes(m.slaves[KNEE].input),
+            bytes(m.slaves[ANKLE].input),
+            bytes(m.slaves[MEDULLA].input),
+        )
+        self._ingest(frame)
+        return frame
+    
     def close(self) -> None:
         try:
             self.master.state = pysoem.INIT_STATE

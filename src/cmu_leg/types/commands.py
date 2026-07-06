@@ -27,6 +27,13 @@ class DriveCommand:
     ankle_velocity_counts: int = 0
     ankle_torque_per_mille: int = 0
 
+@dataclass
+class PositionCommand:
+    # knee
+    knee_position_counts: int
+    # ankle
+    ankle_position_counts: int
+
 #the output of the high level controller
 @dataclass
 class TorqueDesired:

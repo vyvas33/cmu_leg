@@ -239,9 +239,7 @@ ANKLE = AnkleParams(
     torque_ctrl_spring_vel_lowpass_order=2,
 )
 
-# Offsets from prosthesis_control_NPC/utility_functions/spring_zero_positions.mat
-# (23-Sep-2025 zeroing); counts_to_rad from encoder_counts_to_rad_polys.mat
-# (Feb 2024). Previous values were the 2022 baseline_controller calibration.
+# updated july 2026
 ENCODERS = EncoderParams(
     knee_abs_counts_to_rad=-1.4817901340709475e-08,  # empirical; NOT 2pi/2^17
     ankle_abs_counts_to_rad=2.0 * pi / (2 ** 17),

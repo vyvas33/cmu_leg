@@ -94,13 +94,14 @@ def main():
 
         knee_target = round(min_jerk(knee_start, 0.0, t0_ramp, RAMP_TIME, t))
         ankle_target = round(min_jerk(ankle_start, 0.0, t0_ramp, RAMP_TIME, t))
+        pos_cmd = emit(knee_target, ankle_target)
 
-        if (abs(knee_target - frame.knee_motor_counts) > FOLLOW_ERR_LIMIT
-                or abs(ankle_target - frame.ankle_motor_counts) > FOLLOW_ERR_LIMIT):
+        # following error is emitted command vs actual (what the drive really sees)
+        if (abs(pos_cmd.knee_position_counts - frame.knee_motor_counts) > FOLLOW_ERR_LIMIT
+                or abs(pos_cmd.ankle_position_counts - frame.ankle_motor_counts) > FOLLOW_ERR_LIMIT):
             abort = "following error (leg blocked or spring loaded?)"
-            return emit(frame.knee_motor_counts, frame.ankle_motor_counts)
 
-        return emit(knee_target, ankle_target)
+        return pos_cmd
 
     def run(duration: float, until=None) -> None:
         """Tick at 1 kHz for `duration`, or until `until()` is true."""

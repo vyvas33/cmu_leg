@@ -74,8 +74,12 @@ def main():
         min-jerks to raw 0 afterwards."""
         nonlocal knee_start, ankle_start, t0_ramp, abort
 
-        if abort is None and (drive_state(frame.knee_status_word) == DriveState.FAULT
-                              or drive_state(frame.ankle_status_word) == DriveState.FAULT):
+        # pre-latch faults are left to the CiA-402 FSM (it sends CW_FAULT_RESET
+        # once enable is true); only a fault mid-motion, while still commanding,
+        # aborts -- not during the post-run shutdown ticks
+        if abort is None and ec.enable and t0_ramp is not None and (
+                drive_state(frame.knee_status_word) == DriveState.FAULT
+                or drive_state(frame.ankle_status_word) == DriveState.FAULT):
             abort = "drive fault"
 
         if abort is not None:

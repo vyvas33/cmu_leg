@@ -8,6 +8,8 @@ from cmu_leg.types.sensors import IMUFrame
 from cmu_leg.estimation.encoders import convert_encoders
 from cmu_leg.control.utils import BackwardDifference
 from cmu_leg.control.utils import MedianFilter
+from cmu_leg.control.utils import Lowpass
+from cmu_leg.config.params import ENCODERS, COMMON
 
 class StateEstimator:
     def __init__(self):
@@ -19,12 +21,23 @@ class StateEstimator:
         self.state = ProsthesisState()
         self._ankle_median = MedianFilter()
 
+        # hall GRF proxy lowpass (baseline: Cheby-II 10 Hz; Butterworth stand-in)
+        self._toe_grf_lp = Lowpass(cutoff_freq=10.0, sample_rate=COMMON.sample_rate, order=2)
+        self._heel_grf_lp = Lowpass(cutoff_freq=10.0, sample_rate=COMMON.sample_rate, order=2)
+
 
     def get_state(self, frame: RawEtherCATFrame, imu: IMUFrame, t) -> ProsthesisState:
         self._apply_encoders(frame)
+        self._apply_hall_grfs(frame)
 
         return self.state
 
+    def _apply_hall_grfs(self, frame: RawEtherCATFrame):
+        toe = ENCODERS.hall_0_offset - frame.hall_0
+        heel = ENCODERS.hall_1_offset - frame.hall_1
+
+        self.state.toe_grf = self._toe_grf_lp.compute(toe)
+        self.state.heel_grf = self._heel_grf_lp.compute(heel)
 
     def _apply_encoders(self, frame: RawEtherCATFrame):
         enc_read = convert_encoders(frame=frame, ankle_median=self._ankle_median)

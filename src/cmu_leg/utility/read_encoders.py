@@ -120,6 +120,10 @@ def main():
           {"knee": state_rec.column("knee_torque_measured"),
            "ankle": state_rec.column("ankle_torque_measured")},
           "torque [Nm]", out, "torques.png")
+    _plot("Hall GRF", t,
+          {"toe": state_rec.column("toe_grf"),
+           "heel": state_rec.column("heel_grf")},
+          "GRF [counts]", out, "hall_grf.png")
     _plot_idle(t, idle_log, out)
 
 if __name__ == "__main__":

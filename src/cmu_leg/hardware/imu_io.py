@@ -5,7 +5,7 @@ However, unlike the ec.read() which outputs unscaled raw counts,
 imu.read() here outputs in SI units in sensors' frame.
 Typical Usage:
 
-discover_imu_ports()                            # list CH340 ports -> set params.IMU
+discover_imu_ports()                            # list CH340 ports and manually set params.IMU
 tb, fb = discover_imu_bauds()                   # probe each IMU's current baud
 imu = IMUInterface(thigh_baud=tb, foot_baud=fb) # ports from params, baud passed in
 imu.connect()

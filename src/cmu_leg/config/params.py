@@ -180,6 +180,25 @@ class StandingParams:
     vel_lowpass_order: int                   # Butterworth order
 
 
+@dataclass(frozen=True, slots=True)
+class ImpedanceStanceGains:
+    knee_k: float #Nm/rad
+    knee_b: float #Nm/(rad/s) 
+    knee_off: float #rad
+    ankle_k: float 
+    ankle_b: float 
+    ankle_off: float
+
+@dataclass(frozen=True, slots=True)
+class ImpedanceParams:
+    stance_12_threshold: float
+    stance_23_threshold: float 
+    stance1: ImpedanceStanceGains
+    stance2: ImpedanceStanceGains
+    stance3: ImpedanceStanceGains
+
+
+
 # Default instances (loaded once at import). Inject alternates in tests.
 COMMON = CommonParams()
 
@@ -292,6 +311,30 @@ STANDING = StandingParams(
     knee_vel_lowpass_cutoff=25.0,
     ankle_vel_lowpass_cutoff=20.0,
     vel_lowpass_order=2,
+)
+
+# 3-state finite-state impedance stance (ImpedanceStance). Each phase applies
+#   tau = -k*(angle - off) - b*angle_dot   for knee and ankle.
+# Phase advance: Stance1 -> Stance2 when knee_angle > stance_12_threshold,
+#                Stance2 -> Stance3 when ankle_angle > stance_23_threshold.
+# Reference layout: impedance_control_basic/ParameterLibrary/impedance_control/
+#   optimized_gains_linear.mat (20-vector). k [Nm/rad], b [Nm/(rad/s), floor 0.02],
+#   off/thresholds [rad]. PLACEHOLDERS — tune before enabling.
+IMPEDANCE = ImpedanceParams(
+    stance_12_threshold=0.0,   # rad, on knee_angle
+    stance_23_threshold=0.0,   # rad, on ankle_angle
+    stance1=ImpedanceStanceGains(
+        knee_k=0.0,  knee_b=0.0,  knee_off=0.0,
+        ankle_k=0.0, ankle_b=0.0, ankle_off=0.0,
+    ),
+    stance2=ImpedanceStanceGains(
+        knee_k=0.0,  knee_b=0.0,  knee_off=0.0,
+        ankle_k=0.0, ankle_b=0.0, ankle_off=0.0,
+    ),
+    stance3=ImpedanceStanceGains(
+        knee_k=0.0,  knee_b=0.0,  knee_off=0.0,
+        ankle_k=0.0, ankle_b=0.0, ankle_off=0.0,
+    ),
 )
 
 # dynamic_params.mat -> dynpars (9x1), for the high-level controller (not yet

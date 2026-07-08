@@ -3,7 +3,9 @@ Read and plot the encoder-derived prosthesis state.
 
 Usage:
 uv run python -m cmu_leg.utility.read_encoders
-c
+
+
+vkalva, June 2026
 """
 
 import time

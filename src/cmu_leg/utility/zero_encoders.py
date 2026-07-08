@@ -93,7 +93,7 @@ def main():
                     return emit(frame.knee_motor_counts, frame.ankle_motor_counts)
                 knee_start, ankle_start = frame.knee_motor_counts, frame.ankle_motor_counts
                 t0_ramp = t
-                print(f"[{t:6.3f}s] drives enabled; ramping to zero from knee={knee_start} ankle={ankle_start}")
+                print(f"[{t:6.3f}s] drives enabled, ramping to zero from knee={knee_start} ankle={ankle_start}")
             return emit(frame.knee_motor_counts, frame.ankle_motor_counts)
 
         knee_target = round(min_jerk(knee_start, 0.0, t0_ramp, RAMP_TIME, t))

@@ -24,7 +24,7 @@ from cmu_leg.utility.recorder import Recorder
 from cmu_leg.control.utils import Lowpass
 from cmu_leg.config.params import STANDING, COMMON
 
-DURATION = 10.0  # seconds
+DURATION = 20.0  # seconds
 
 def _plot(title, t, series, ylabel, out, fname):
     fig, ax = plt.subplots(figsize=(11, 5))

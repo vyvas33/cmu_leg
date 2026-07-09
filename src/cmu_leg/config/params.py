@@ -266,8 +266,8 @@ ENCODERS = EncoderParams(
     ankle_abs_counts_offset=-428,
     knee_motor_abs_counts_offset=-54,
     ankle_motor_abs_counts_offset=-2_328,
-    hall_0_offset=197,
-    hall_1_offset=217,
+    hall_0_offset=1_786,
+    hall_1_offset=2270,
 )
 
 IMU = IMUParams(

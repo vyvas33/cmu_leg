@@ -14,6 +14,17 @@ class CommonParams:
     sample_rate: float = 1000.0              # Hz
     sample_time: float = 0.001               # s
 
+    # Measured-dt clamp, applied wherever a real elapsed dt is divided by.
+    # The loop schedules 1 kHz but does not always make it: logged standing runs
+    # sit at 1.000 ms median / 1.02 ms p99, with a ~21 ms outlier once per 15 s
+    # run and ~0.7% of ticks under 0.5 ms (the catch-up burst after an overrun).
+    # dt_max keeps the 21 ms tick from being integrated as one step; dt_min
+    # bounds quantization-noise gain on the differentiators -- velocity noise
+    # goes as 1/dt, and a 17-bit encoder count (4.8e-5 rad) over 0.19 ms is
+    # already 0.25 rad/s of pure noise.
+    dt_min: float = 0.0005                   # s
+    dt_max: float = 0.005                    # s
+
     # ticks after control_enabled rises during which the pipeline runs but drives
     # are muted to zero (filters settle); Simulink LLC "1 s Delay" = 1000 @ 1 kHz
     startup_mute_ticks: int = 1000
@@ -342,4 +353,139 @@ IMPEDANCE = ImpedanceParams(
 DYNPARS: tuple[float, ...] = (
     0.0742, 1.5952, 0.0064, 3.5057, 0.0896,
     2.5055, 0.0305, 0.0117, 0.0865,
+)
+
+
+# ESKF (estimation/eskf). PLACEHOLDER values pending tuning on hardware.
+# Q sigmas follow the baseline convention: each 30-dim Q diagonal entry is
+# (sigma * dt)^2, per-body order [dtheta, gyro bias, pos (0), vel, accel bias].
+# sigma_dtheta/sigma_dv drive the attitude/velocity random walks (IMU white
+# noise); sigma_gyr/sigma_acc drive the bias random walks. Values from
+# params_new.m (the set nm_nn.m actually loads; params.m has an older set).
+@dataclass(frozen=True, slots=True)
+class ESKFConfig:
+    dt: float                    # nominal filter tick [s]; fallback when dt is not measurable
+    # measured-dt clamp, as multiples of the nominal dt. The filter integrates
+    # the caller's clock delta (t - t_prev), so loop jitter is absorbed; the
+    # clamp keeps a scheduler stall or a clock glitch from injecting a huge step.
+    # DEAD as of the measured-dt refactor: the ESKF no longer derives its own
+    # dt, the caller passes one already clamped to COMMON.dt_min/dt_max. Kept
+    # only so the ESKFConfig literal below still constructs; delete both once
+    # nothing references them.
+    dt_min_factor: float
+    dt_max_factor: float
+    # an IMU sample older than this (host clock, same timebase as t) means the
+    # USB stream stalled -- zero-order hold would silently integrate frozen
+    # data, so the filter reports itself unhealthy instead.
+    imu_stale_timeout: float     # [s]
+    # process noise sigmas, thigh
+    sigma_dtheta_thigh: float    # attitude random walk [rad/s]
+    sigma_gyr_thigh: float       # gyro-bias walk [rad/s^2... baseline units, unverified]
+    sigma_dv_thigh: float        # velocity random walk [m/s^2]
+    sigma_acc_thigh: float       # accel-bias walk
+    # process noise sigmas, foot
+    sigma_dtheta_foot: float
+    sigma_gyr_foot: float
+    sigma_dv_foot: float
+    sigma_acc_foot: float
+    # measurement noise
+    sigma_enc: float             # encoder angle noise [rad]
+    sigma_rate: float            # joint-rate noise [rad/s]; raw derivative -> expect big
+    sigma_model_pos: float       # kinematic-model floor, position closure [m]
+    sigma_model_vel: float       # kinematic-model floor, velocity closure [m/s]
+    sigma_zupt: float            # zero-velocity pseudo-measurement [m/s]
+    # initial error covariance, per-body diag VARIANCES (baseline Delay_P init;
+    # both bodies identical). pos = 0: the start pose defines the nav origin.
+    p0_att: float                # [rad^2]  ~ comp-filter handoff quality
+    p0_gyr_bias: float           # [(rad/s)^2]
+    p0_pos: float                # [m^2]
+    p0_vel: float                # [(m/s)^2]
+    p0_acc_bias: float           # [(m/s^2)^2]
+    # comp-filter init
+    init_duration: float         # [s] comp filter runs this long before ESKF starts
+    comp_beta: float             # comp-filter pull rate [rad/s]; > worst tilt / init_duration
+    # inflate Q's dtheta/dv terms with the measured integration error (change in
+    # corrected acc/gyro between ticks) instead of white noise alone
+    dynamic_process_noise: bool
+
+
+ESKF_CFG = ESKFConfig(
+    dt=0.001,
+    dt_min_factor=0.5,
+    dt_max_factor=5.0,
+    imu_stale_timeout=0.05,   # IMU streams ~200 Hz (5 ms); 50 ms = 10 missed
+    sigma_dtheta_thigh=0.01, sigma_gyr_thigh=0.001,
+    sigma_dv_thigh=1.0, sigma_acc_thigh=0.001,
+    sigma_dtheta_foot=0.01, sigma_gyr_foot=0.001,
+    sigma_dv_foot=1.0, sigma_acc_foot=0.001,
+    sigma_enc=0.01,
+    sigma_rate=0.1,
+    sigma_model_pos=0.01,
+    sigma_model_vel=0.01,
+    sigma_zupt=0.01,
+    p0_att=1e-4, p0_gyr_bias=1e-4, p0_pos=0.0, p0_vel=1e-3, p0_acc_bias=1e-3,
+    init_duration=1.0,
+    comp_beta=5.0,
+    dynamic_process_noise=False,
+)
+
+
+# Leg geometry for the ESKF kinematic chain (estimation/eskf). Decoded from the
+# baseline ESKF transforms (prosthesis_control_NPC/ESKF/T_O*_func_eskf_new.m)
+# evaluated at identity attitude, with lengths from params_new.m.
+# Body frame convention (see eskf/kinematics.py): +x forward, +y left, +z up.
+@dataclass(frozen=True, slots=True)
+class LegGeometry:
+    shank_length: float                          # ankle joint -> knee joint [m]
+    knee_to_thigh_imu: tuple[float, float, float]  # knee -> thigh IMU origin, thigh frame [m]
+    foot_imu_to_ankle: tuple[float, float, float]  # foot IMU origin -> ankle, foot frame [m]
+    ankle_to_toe: tuple[float, float, float]     # ankle -> toe, foot frame [m]
+    ankle_to_heel: tuple[float, float, float]    # ankle -> heel, foot frame [m]
+    hip_to_knee: float                           # SUBJECT SPECIFIC, see note below [m]
+    knee_angle_offset: float                     # baseline 'gamma' [rad], see note
+    thigh_imu_pitch: float                       # IMU mount tilt [rad], TUNING, see note
+
+
+LEG = LegGeometry(
+    # = params_new.m length_shank; baseline trans_knee_ankle = [0;0;-length_shank]
+    # confirms the offset is purely along the link.
+    shank_length=0.215,
+    # From T_OK at identity: knee sits at [-0.0846, -0.0550, -0.1040] in the
+    # thigh IMU frame, so the IMU is that far the other way. NOT a pure offset
+    # along the link: the IMU is mounted 5.5 cm off the sagittal plane and
+    # 8.5 cm fore-aft, only 10.4 cm above the knee. The baseline's alpha
+    # (0.67 deg thigh-IMU pitch mounting offset) is ALREADY baked into these
+    # numbers -- do not apply it a second time.
+    knee_to_thigh_imu=(0.084567, 0.055, 0.103991),
+    # CONFIRMED zero on our hardware (Jul 2026): the foot IMU sits on the ankle
+    # joint itself. Matches the baseline, which never models this offset -- its
+    # loop closure walks thigh -> knee -> ankle and compares that straight to
+    # the foot position.
+    foot_imu_to_ankle=(0.0, 0.0, 0.0),
+    ankle_to_toe=(0.156, 0.0, -0.096),
+    ankle_to_heel=(-0.09, 0.0, -0.096),
+    # params_new.m length_thigh. Depends on the wearer (the file lists 0.55 to
+    # 0.71 for different subjects); 0.66 is "John". Not used by the loop
+    # closures, needed for hip position when leg kinematics is ported.
+    hip_to_knee=0.66,
+    # baseline gamma = 6 deg, added to the knee angle before the shank
+    # rotation. Kept for reference ONLY -- see thigh_imu_pitch below for why we
+    # do not apply it as a knee offset. Unused.
+    knee_angle_offset=6.0 * pi / 180.0,
+    # Fixed pitch of the thigh IMU mount about the body +y (sagittal) axis.
+    # POSITIVE = the sensor's +x (forward) axis tilts UP relative to the thigh
+    # link, so the sensor->body map is rot_y(-thigh_imu_pitch) @ <axis
+    # permutation> (eskf.py) and knee_to_thigh_imu, which is expressed in the
+    # SENSOR frame, gets the same rot_y(-pitch) applied (measurements.py).
+    # Both effects MUST stay coupled: one physical tilt rotates the frame the
+    # chain descends in AND re-expresses the knee->IMU vector. This is the
+    # correct home for the constant angular offset -- putting it in THETA0_KNEE
+    # instead would get the attitude sum right but leave the knee position
+    # wrong by |knee_to_thigh_imu| * pitch (~14 mm at 6 deg).
+    #
+    # CONFIRMED Jul 2026: the thigh IMU sits 6 deg NEGATIVE about body +y.
+    # Note this is OUR mount, established on our hardware -- it is not the
+    # baseline's gamma (6 deg at the knee slot), which stays unused; the numeric
+    # match is a coincidence of magnitude, not the same physical quantity.
+    thigh_imu_pitch=-6.0 * pi / 180.0,
 )

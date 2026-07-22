@@ -126,10 +126,13 @@ class AnkleTorqueController:
         self.ankle_stiffness = ankle.stiffness
         self.ankle_motor_damping = ankle.motor_damping
         self.ankle_motor_inertia = ankle.motor_inertia
-        self.sample_time = common.sample_time
 
-        self._dd_tau = BackwardDifference(self.sample_time)
-        self._dd_tau_dot = BackwardDifference(self.sample_time)
+        # Both differences run on the caller's measured dt. These two are the
+        # most dt-sensitive quantities in the stack: tau_ddot is a difference OF
+        # tau_dot, so a bad dt is compounded through both stages rather than
+        # just added, and the result feeds the drive feedforward.
+        self._dd_tau = BackwardDifference()
+        self._dd_tau_dot = BackwardDifference()
         self._lowpass_spring_velocity = Lowpass(
             cutoff_freq=ankle.torque_ctrl_spring_vel_lowpass_cutoff,
             sample_rate=common.sample_rate,
@@ -149,13 +152,14 @@ class AnkleTorqueController:
 
     def compute(self,
                 state: ProsthesisState,
-                ankle_torque_commanded: float) -> tuple[float, float]:
+                ankle_torque_commanded: float,
+                dt: float) -> tuple[float, float]:
 
         if not self._verified:
             raise NotImplementedError("Ankle Torque Controller not verified yet!")
 
-        ankle_torque_commanded_dot = self._dd_tau.compute(ankle_torque_commanded)
-        ankle_torque_commanded_ddot = self._dd_tau_dot.compute(ankle_torque_commanded_dot)
+        ankle_torque_commanded_dot = self._dd_tau.compute(ankle_torque_commanded, dt)
+        ankle_torque_commanded_ddot = self._dd_tau_dot.compute(ankle_torque_commanded_dot, dt)
 
         ankle_spring_velocity_filtered = self._lowpass_spring_velocity.compute(state.ankle_spring_velocity)
 

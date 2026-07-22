@@ -1,26 +1,35 @@
 # coding:UTF-8
 """
-WitMotion HWT906 Inclinometer Driver.
+WitMotion HWT906 Inclinometer Driver (hwt906.py).
 
 A self-contained driver that communicates directly with the WITMOTION HWT906
 IMU/AHRS sensor over a serial (TTL) interface. It handles asynchronous binary
-stream parsing, cycle-slip corrected Software PLL, lock-protected thread-safe
+stream parsing, α-filter host timestamp estimation, lock-protected thread-safe
 register queries, calibration controls, and single-slot latest-frame delivery.
 
 Typical Usage:
-    from witapi import WitMotionSensor, discover_port, discover_baud
+    from drivers.witmotion import WitMotionSensor, discover_port, discover_baud
 
     port = discover_port()
-    baud = discover_baud(port)
+    baud = discover_baud(port)  # replace with sensor baud rate setting if known
     sensor = WitMotionSensor(port=port, baud_bps=baud)
     sensor.connect()
 
     sensor.set_outputs(ts=True, acc=True, gyro=True)
-    sensor.stream()
 
-    data = sensor.get_reading()
+    sensor.stream()
+    while not sensor.drain_data_buffer():
+        time.sleep(0.1)  # wait for host-side data parsing thread to get online
+
+    # Real-time mode:
+    data = sensor.latest_data
     if data:
-        print(data["acc"], data["pll_time_s"])
+        print(data["acc"], data["host_time_s"])
+
+    # Logging mode:
+    batch = sensor.drain_data_buffer()
+    for frame in batch:
+        print(frame["host_time_s"])
 
     sensor.disconnect()
 
@@ -32,6 +41,7 @@ import math
 import struct
 import threading
 import time
+from collections import deque
 
 import serial
 import serial.tools.list_ports
@@ -98,7 +108,7 @@ def _config_only(method):
     @functools.wraps(method)
     def wrapper(self, *args, **kwargs):
         if self._listening:
-            raise RuntimeError("Call disconnect() before changing configuration.")
+            raise RuntimeError("Call stop_streaming() before changing configuration.")
         return method(self, *args, **kwargs)
 
     return wrapper
@@ -114,12 +124,26 @@ class WitMotionSensor:
 
     SI Unit Boundary:
         The hardware streams range-scaled 16-bit integers. The driver converts all
-        physical quantities to SI units before exposing them via get_reading():
+        physical quantities to SI units before exposing them via the driver:
           - Acceleration:    m/s²  (using _STANDARD_GRAVITY = 9.80665 m/s²)
           - Angular velocity: rad/s
           - Magnetic field:   µT
           - Euler angles:     rad
         Callers are not expected to apply any further unit conversion.
+
+    Dual-Modality Data Access:
+    ===========================================================================
+    The driver provides two distinct ways to access parsed data frames, serving
+    different application requirements:
+
+    1. Real-time Snapshot (latest_data property):
+       Returns the most recently parsed frame (Zero-Order Hold). Ideal for
+       low-latency control loops or real-time predictors. Non-destructive.
+
+    2. Gapless History (drain_data_buffer() method):
+       Returns a list of all frames received since the last call and clears the
+       internal reservoir. Ideal for logging trials to disk, ensuring no frames
+       are missed due to OS scheduling jitter. Destructive.
 
     Configuration Features & Hardware Registers:
     ===========================================================================
@@ -186,7 +210,14 @@ class WitMotionSensor:
         - Maximum acceleration range.
         - Supported values: 2, 4, 8, 16 g.
 
-    11. Mounting Orientation (Register 0x23)
+    11. Sleep Mode (Register 0x22)
+        - Write 0x0001 to enter low-power hibernation. The sensor stops streaming and
+          draws minimal current. Cannot be persisted to flash (saving requires the sensor
+          to be awake); resets to active (0x0000) on power cycle.
+        - Wake-up: any UART byte wakes the sensor. connect() implicitly wakes it via
+          the register read commands sent during the verification loop.
+
+    12. Mounting Orientation (Register 0x23)
         - Mount layout.
         - Range: 0 = Horizontal mounting (default), 1 = Vertical mounting.
 
@@ -240,7 +271,7 @@ class WitMotionSensor:
     }
     # fmt: on
 
-    def __init__(self, port: str = None, baud_bps: int = 921600):
+    def __init__(self, port: str | None = None, baud_bps: int = 921600):
         """
         Initialize the sensor driver.
 
@@ -265,14 +296,20 @@ class WitMotionSensor:
         self._parser_thread = None
         self._queue_lock = threading.Lock()
         self._listening = False
+        self._latest = None  # snapshot for real-time control (Non-destructive)
+        self._buffer = deque(maxlen=100)  # reservoir for logging (Destructive)
+        self._buffer_window_s = 5.0  # target reservoir depth in seconds
+
+        self.chksum_error = 0  # packets discarded due to checksum mismatch
+        self.data_frames_rcvd = 0  # complete sensor frames assembled
 
         self._packet_ids = set()  # packet IDs enabled via set_outputs()
         self._trigger_packet_id = None  # highest active ID; parser dispatches on its arrival
         self._acc_ndigits = None  # round() precision for acc output; derived from range LSB
         self._gyro_ndigits = None  # round() precision for gyro output; derived from range LSB
         self._sensor_data: dict = {  # in-place accumulation buffer; one slot per output
+            "host_time_s": None,
             "time_s": None,
-            "pll_time_s": None,
             "acc": None,
             "gyro": None,
             "mag": None,
@@ -282,13 +319,16 @@ class WitMotionSensor:
         }
         self._latest = None  # latest sensor data set accessed by get_reading()
 
-        # --- Software PLL (None until stream() runs) ---
-        self._pll_alpha = 0.02
-        self._pll_sample_period: float | None
-        self._pll_t_est: float | None
-        self._start_pc_time: float | None
-        self._start_sensor_ms: float | None
-        self._sensor_time_ms: float | None
+        # --- Sensor Side Data Time Stamps ---
+        self._ref_time: float | None  # reference time of first streamed data
+        self._data_ts: float | None  # data time stamp increasing monotonically
+        self._days_counter: int  # for preventing midnight wrapping
+        self._inter_sample_periods: int | None  # number of sample periods between data packets
+
+        # --- Host Side Data Time Stamps  ---
+        self._host_ref_time: float | None
+        self._host_data_ts_estimate: float | None
+        self._alpha = 0.02  # α-filter gain for host timestamp estimation
 
     # --------------------
     # 1. CONNECT TO SENSOR
@@ -305,7 +345,7 @@ class WitMotionSensor:
 
         Raises:
             ConnectionError: Sensor did not respond after 10 verification attempts.
-                If connection fails on macOS at high baud, run api/witrecovery.py
+                If connection fails on macOS at high baud, run drivers/witmotion/witrecovery.py
                 to auto-discover the baudrate or recover communication.
         """
         # Auto-discover port if not explicitly provided
@@ -314,10 +354,14 @@ class WitMotionSensor:
             print(f"WitMotion sensor discovered on port: {self.port}")
 
         print(f"Connecting to WitMotion sensor on {self.port} with baudrate={self.baud} bps: ", end="")
-        self._connection = serial.Serial(self.port, self.baud, timeout=0.05)
+        # exclusive=True prevents any other process from opening the same port
+        # simultaneously, eliminating read contention. On macOS this is a no-op.
+        self._connection = serial.Serial(self.port, self.baud, timeout=0.05, exclusive=True)
 
         # Verify serial communication is working at the requested baudrate.
         # Retry up to 10 times to account for initial packet sync phase.
+        # Note: if the sensor is sleeping, the first read command (any UART byte)
+        # wakes it, and the 100ms inter-attempt delay gives it time to come online.
         verified = False
         for attempt in range(1, 11):
             try:
@@ -325,17 +369,17 @@ class WitMotionSensor:
                 verified = True
                 break
             except TimeoutError:
-                print(f"Baudrate verification attempt {attempt}/10 timed out...")
                 time.sleep(0.1)
 
         if not verified:
             self.disconnect()
+            print("Baudrate verification timed out. Connection could not be established.")
             print("\n" + "=" * 60)
             print("TROUBLESHOOTING BAUD RATE CONNECTION ERROR:")
             print("1. Check the physical USB connection and sensor power.")
             print("2. Ensure baud_bps matches the sensor's current setting.")
             print("3. If the baudrate is unknown or comm fails on macOS, run:")
-            print("   python api/witrecovery.py")
+            print("   python drivers/witmotion/witrecovery.py")
             print("=" * 60 + "\n")
             raise ConnectionError(
                 f"Communication verification failed at {self.baud} baud on port {self.port}. "
@@ -346,15 +390,17 @@ class WitMotionSensor:
 
         # Reset parser state and timing variables
         self._listening = False
-        self._start_sensor_ms = None
-        self._sensor_time_ms = None
-        self._pll_t_est = None
-        self._start_pc_time = None
+        self._ref_time = None
+        self._data_ts = None
+        self._inter_sample_periods = None
+        self._days_counter = 0
+        self._host_ref_time = None
+        self._host_data_ts_estimate = None
 
         # Sync sensor hardware state into driver: rate, LPF and ranges.
         rate_reg = self._read_registers(0x03, 1)
         self.rate = {v: k for k, v in self._RATE_MAP.items()}[rate_reg[0]]
-        self._pll_sample_period = 1.0 / self.rate
+        self._update_buffer_size()
 
         lpf_reg = self._read_registers(0x1F, 1)
         self.filt = {v: k for k, v in self._LPF_MAP.items()}[lpf_reg[0]]
@@ -365,21 +411,56 @@ class WitMotionSensor:
         self._acc_ndigits = math.ceil(-math.log10(self.acc_range / 32768.0 * self._STANDARD_GRAVITY))
         self._gyro_ndigits = math.ceil(-math.log10(self.gyro_range / 32768.0 * (math.pi / 180.0)))
 
-    def disconnect(self):
+    @_config_only
+    def sleep(self):
         """
-        Stop the reading thread (if running) and close the serial port.
+        Put the sensor into low-power sleep mode (register 0x22 = 0x0001).
+
+        The sensor wakes on any UART activity; connect() implicitly wakes it
+        via the register read commands it sends. Sleep state is not persisted
+        to flash and resets on power cycle.
+
+        Requires stop_streaming() to be called first (@_config_only guard).
         """
-        if self._listening:
-            self._listening = False
-            self._parser_thread.join(timeout=1.0)
-            self._parser_thread = None
-            with self._queue_lock:
-                self._latest = None
+        self._write_register(0x22, 0x0001)
+
+    def stop_streaming(self, report: bool = False):
+        """
+        Stop the background parsing thread without closing the serial port.
+
+        Allows reconfiguration while staying connected. Call stream() to resume.
+
+        Args:
+            report (bool): If True, print data_frames_rcvd and chksum_error on stop.
+        """
+        if not self._listening:
+            return
+        self._listening = False
+        self._parser_thread.join(timeout=1.0)
+        self._parser_thread = None
+        with self._queue_lock:
+            self._latest = None
+        if report:
+            print(
+                f"Sensor streaming thread stopped "
+                f"(data frames processed: {self.data_frames_rcvd}, packet checksum errors: {self.chksum_error})."
+            )
+        else:
             print("Sensor streaming thread stopped.")
 
+    def disconnect(self, report: bool = False):
+        """
+        Stop the reading thread (if running), sleep the sensor, and close the serial port.
+
+        Args:
+            report (bool): If True, print data_frames_rcvd and chksum_error when streaming stops.
+        """
+        self.stop_streaming(report=report)
+
         if self._connection and self._connection.is_open:
+            self.sleep()
             self._connection.close()
-            print("WitMotion sensor disconnected.")
+            print("WitMotion hwt906 sensor disconnected.")
 
     # ----------------------
     # 2. COLLECT SENSOR DATA
@@ -389,8 +470,8 @@ class WitMotionSensor:
         """
         Start the background packet parsing thread.
 
-        Returns immediately (non-blocking). Use get_reading() to retrieve data.
-        Call disconnect() to stop.
+        Returns immediately (non-blocking). Use latest_data or drain_data_buffer() to retrieve data.
+        Call stop_streaming() to pause without closing the port, or disconnect() to fully tear down.
         """
         if not self._connection or not self._connection.is_open:
             raise RuntimeError("Sensor is disconnected. Call connect() first.")
@@ -411,6 +492,9 @@ class WitMotionSensor:
             if pid in self._packet_ids:
                 self._sensor_data[field] = [0.0] * n
 
+        self.chksum_error = 0
+        self.data_frames_rcvd = 0
+
         self._listening = True
         self._parser_thread = threading.Thread(
             target=self._host_side_parsing_thread, name="WitMotion-Parsing-Thread", daemon=True
@@ -418,24 +502,37 @@ class WitMotionSensor:
         self._parser_thread.start()
         print("Sensor streaming thread started.")
 
-    def get_reading(self):
+    @property
+    def latest_data(self):
         """
-        Return the latest parsed data set (non-destructive).
+        The most recently parsed data frame (Zero-Order Hold).
 
-        Returns the same set on repeated calls until the parser overwrites it with
-        a new one. Use the `pll_time_s` field to detect whether the set is new:
-
-            timestamp = None
-            data = sensor.get_reading()
-            if data is not None and data["pll_time_s"] != timestamp:
-                timestamp = data["pll_time_s"]
-                # process new frame
+        Returns the latest state of the sensor. Repeated access returns the same set
+        until the parser thread overwrites it with a new one. This is non-destructive
+        and ideal for low-latency real-time control or prediction.
 
         Returns:
-            dict: The most recent data set, or None if no set has been received yet.
+            dict | None: The most recent data set, or None if no data has been parsed.
         """
         with self._queue_lock:
             return self._latest
+
+    def drain_data_buffer(self) -> list[dict]:
+        """
+        Consume all frames from the internal reservoir and clear it.
+
+        Returns a list of all data sets received since the last call to this method.
+        This is destructive and ideal for gapless logging or post-processing trials,
+        ensuring that no intermediate samples are lost due to OS scheduling jitter.
+
+        Returns:
+            list[dict]: A list of data frames. Returns an empty list [] if the
+                buffer is currently empty.
+        """
+        with self._queue_lock:
+            batch = list(self._buffer)
+            self._buffer.clear()
+            return batch
 
     def get_data_header(self):
         """
@@ -446,9 +543,9 @@ class WitMotionSensor:
 
         Returns:
             str: Comma-separated column names with units, e.g.
-                 "pll_time_s [s], acc_x [m/s²], acc_y [m/s²], acc_z [m/s²], ..."
+                 "host_time_s [s], acc_x [m/s²], acc_y [m/s²], acc_z [m/s²], ..."
         """
-        active_fields = {"pll_time_s"}
+        active_fields = {"host_time_s"}
         for pid, fields in [
             (0x50, ["time_s"]),
             (0x51, ["acc", "temp"]),
@@ -462,8 +559,8 @@ class WitMotionSensor:
 
         columns = []
         for field, suffixes, unit in [
+            ("host_time_s", [""], "s"),
             ("time_s", [""], "s"),
-            ("pll_time_s", [""], "s"),
             ("acc", ["_x", "_y", "_z"], "m/s²"),
             ("gyro", ["_x", "_y", "_z"], "rad/s"),
             ("mag", ["_x", "_y", "_z"], "µT"),
@@ -524,7 +621,7 @@ class WitMotionSensor:
             mag (bool): Enable Magnetic Field packet (0x54).
             quat (bool): Enable Quaternion packet (0x59).
         """
-        self._check_bandwidth(sum((ts, acc, gyro, ang, mag, quat)), self.rate, self.baud)
+        # self._check_bandwidth(sum((ts, acc, gyro, ang, mag, quat)), self.rate, self.baud)
 
         val, active = 0, set()
         for enabled, bit, pid in [
@@ -542,10 +639,7 @@ class WitMotionSensor:
         if not active:
             raise ValueError("At least one output must remain enabled.")
 
-        # Check current value before writing
-        current_regs = self._read_registers(0x02, 1)
-        if current_regs[0] != val:
-            self._write_register(0x02, val)
+        self._write_register(0x02, val)
 
         # Configure local trigger packet to match the last packet in transmission order
         self._packet_ids = active
@@ -566,12 +660,21 @@ class WitMotionSensor:
         # Check bandwidth capacity
         self._check_bandwidth(len(self._packet_ids), rate_hz, self.baud)
 
-        target_val = self._RATE_MAP[rate_hz]
-        current_regs = self._read_registers(0x03, 1)
-        if current_regs[0] != target_val:
-            self._write_register(0x03, target_val)
+        self._write_register(0x03, self._RATE_MAP[rate_hz])
         self.rate = rate_hz
-        self._pll_sample_period = 1.0 / rate_hz
+        self._update_buffer_size()
+
+    def _update_buffer_size(self):
+        """
+        Recalculate and re-initialize the data buffer capacity based on the
+        current sensor rate and the target time window (self._buffer_window_s).
+        """
+        new_capacity = int(self.rate * self._buffer_window_s)
+        with self._queue_lock:
+            # Re-initialize the deque with the new maxlen.
+            # Old data is discarded during the resize, which is acceptable
+            # as this only occurs when hardware parameters are changed.
+            self._buffer = deque(maxlen=max(new_capacity, 100))
 
     @_config_only
     def set_lpf(self, cutoff_freq_hz):
@@ -585,10 +688,7 @@ class WitMotionSensor:
         if cutoff_freq_hz not in self._LPF_MAP:
             raise ValueError(f"Unsupported bandwidth: {cutoff_freq_hz} Hz. Choose from {list(self._LPF_MAP.keys())}")
 
-        target_val = self._LPF_MAP[cutoff_freq_hz]
-        current_regs = self._read_registers(0x1F, 1)
-        if current_regs[0] != target_val:
-            self._write_register(0x1F, target_val)
+        self._write_register(0x1F, self._LPF_MAP[cutoff_freq_hz])
         self.filt = cutoff_freq_hz
 
     @_config_only
@@ -636,10 +736,7 @@ class WitMotionSensor:
         Args:
             enabled (bool): Enable (True) or disable (False) auto-gyro calibration (default: False).
         """
-        val = 0 if enabled else 1
-        current_regs = self._read_registers(0x63, 1)
-        if current_regs[0] != val:
-            self._write_register(0x63, val)
+        self._write_register(0x63, 0 if enabled else 1)
 
     @_config_only
     def set_gyro_range(self, range_dps):
@@ -655,10 +752,7 @@ class WitMotionSensor:
                 f"Unsupported gyroscope range: {range_dps} dps. Choose from {list(self._GYRO_RANGE_MAP.keys())}"
             )
 
-        target_val = self._GYRO_RANGE_MAP[range_dps]
-        current_regs = self._read_registers(0x20, 1)
-        if current_regs[0] != target_val:
-            self._write_register(0x20, target_val)
+        self._write_register(0x20, self._GYRO_RANGE_MAP[range_dps])
         self.gyro_range = float(range_dps)
         self._gyro_ndigits = math.ceil(-math.log10(self.gyro_range / 32768.0 * (math.pi / 180.0)))
 
@@ -674,10 +768,7 @@ class WitMotionSensor:
         if range_g not in self._ACC_RANGE_MAP:
             raise ValueError(f"Unsupported accelerometer range: {range_g} g. Choose from {list(self._ACC_RANGE_MAP.keys())}")
 
-        target_val = self._ACC_RANGE_MAP[range_g]
-        current_regs = self._read_registers(0x21, 1)
-        if current_regs[0] != target_val:
-            self._write_register(0x21, target_val)
+        self._write_register(0x21, self._ACC_RANGE_MAP[range_g])
         self.acc_range = float(range_g)
         self._acc_ndigits = math.ceil(-math.log10(self.acc_range / 32768.0 * self._STANDARD_GRAVITY))
 
@@ -689,10 +780,7 @@ class WitMotionSensor:
         Args:
             enabled (bool): Turn LED on (True) or off (False).
         """
-        val = 0 if enabled else 1
-        current_regs = self._read_registers(0x1B, 1)
-        if current_regs[0] != val:
-            self._write_register(0x1B, val)
+        self._write_register(0x1B, 0 if enabled else 1)
 
     @_config_only
     def set_mounting_orientation(self, vertical=False):
@@ -703,10 +791,7 @@ class WitMotionSensor:
             vertical (bool): Set to False for horizontal mounting (default),
                 or True for vertical mounting.
         """
-        val = 1 if vertical else 0
-        current_regs = self._read_registers(0x23, 1)
-        if current_regs[0] != val:
-            self._write_register(0x23, val)
+        self._write_register(0x23, 1 if vertical else 0)
 
     @_config_only
     def set_algorithm_axis(self, use_6axis=False):
@@ -717,10 +802,7 @@ class WitMotionSensor:
             use_6axis (bool): Set to False for 9-axis (uses magnetometer for heading),
                 or True for 6-axis (yaw is calculated relative to starting position).
         """
-        val = 1 if use_6axis else 0
-        current_regs = self._read_registers(0x24, 1)
-        if current_regs[0] != val:
-            self._write_register(0x24, val)
+        self._write_register(0x24, 1 if use_6axis else 0)
 
     @_config_only
     def set_filter_coefficient(self, filtk_val):
@@ -736,9 +818,7 @@ class WitMotionSensor:
         """
         if not (1 <= filtk_val <= 10000):
             raise ValueError("Filter coefficient must be between 1 and 10000.")
-        current_regs = self._read_registers(0x25, 1)
-        if current_regs[0] != filtk_val:
-            self._write_register(0x25, filtk_val)
+        self._write_register(0x25, filtk_val)
 
     @_config_only
     def set_offsets(self, ax, ay, az, gx, gy, gz, mx, my, mz):
@@ -811,7 +891,7 @@ class WitMotionSensor:
             restore_baud (bool): If True (default), the driver will automatically
                 reconnect blindly at 921600 bps after the reset, restore the baud rate
                 back to the current operating baud rate (e.g., 460800), save it to flash,
-                and reconnect the API. This ensures the user does not lose connection
+                and reconnect the driver. This ensures the user does not lose connection
                 on Mac OS due to serial clock jitter.
         """
         current_baud = self.baud
@@ -945,12 +1025,12 @@ class WitMotionSensor:
         """
         # Send unlock command (required before any register write)
         self._connection.write(self._UNLOCK_CMD)
-        time.sleep(0.05)
+        time.sleep(0.1)
 
         # Send write register command: 0xFF 0xAA [REG] [VAL_L] [VAL_H]
         write_cmd = bytearray([0xFF, 0xAA, reg_addr & 0xFF, value & 0xFF, (value >> 8) & 0xFF])
         self._connection.write(write_cmd)
-        time.sleep(0.05)
+        time.sleep(0.1)
 
     def _read_registers(self, start_reg, count=4):
         """
@@ -965,28 +1045,31 @@ class WitMotionSensor:
             list: List of count integer values.
 
         Raises:
-            TimeoutError: If no register response is received within 50ms.
+            TimeoutError: If no register response is received after 5 attempts.
         """
-        # Send read register query command: 0xFF 0xAA 0x27 [REG_L] [REG_H]
         read_cmd = bytearray([0xFF, 0xAA, 0x27, start_reg & 0xFF, (start_reg >> 8) & 0xFF])
 
-        self._connection.write(read_cmd)
+        for attempt in range(5):
+            if self._connection.in_waiting:
+                self._connection.read(self._connection.in_waiting)
 
-        buffer = bytearray()
-        deadline = time.perf_counter() + 0.05
-        while True:
-            chunk = self._connection.read(max(1, self._connection.in_waiting))
-            if not chunk or time.perf_counter() > deadline:
-                raise TimeoutError(f"Register read query for address {start_reg:#04x} timed out.")
-            buffer.extend(chunk)
-            while True:
+            self._connection.write(read_cmd)
+
+            deadline = time.perf_counter() + 0.20
+            buffer = bytearray()
+            while time.perf_counter() < deadline:
                 result = self._next_packet(buffer)
-                if result is None:
-                    break
-                ptype, payload = result
-                if ptype == 0x5F:  # Register response
-                    val0, val1, val2, val3 = struct.unpack("<HHHH", payload)
-                    return [val0, val1, val2, val3][:count]
+                if result is not None:
+                    ptype, payload = result
+                    if ptype == 0x5F:  # Register response
+                        val0, val1, val2, val3 = struct.unpack("<HHHH", payload)
+                        return [val0, val1, val2, val3][:count]
+                    continue
+                chunk = self._connection.read(max(1, self._connection.in_waiting))
+                if chunk:
+                    buffer.extend(chunk)
+
+        raise TimeoutError(f"Register read query for address {start_reg:#04x} timed out.")
 
     # -----------------------------
     # 5. INTERNAL HELPERS (PRIVATE)
@@ -1053,6 +1136,8 @@ class WitMotionSensor:
         """
         Background parsing thread execution loop.
         Drains the OS buffer and parses incoming bytes.
+
+        Each complete frame assembled increments self.data_frames_rcvd.
         """
         buffer = bytearray()
         received_this_cycle = set()
@@ -1070,7 +1155,16 @@ class WitMotionSensor:
                         received_this_cycle.add(ptype)
                         if ptype == self._trigger_packet_id:
                             if self._packet_ids.issubset(received_this_cycle):
-                                self._commit_data()  # commits timestamped, parsed data to self._latest
+                                self.data_frames_rcvd += 1
+                                self._estimate_true_host_ts()
+                                data_copy = {
+                                    k: list(v) if isinstance(v, list) else v
+                                    for k, v in self._sensor_data.items()
+                                    if v is not None
+                                }
+                                with self._queue_lock:
+                                    self._latest = data_copy
+                                    self._buffer.append(data_copy)
                             received_this_cycle.clear()
                 else:
                     time.sleep(0.5 / self.rate)
@@ -1081,6 +1175,8 @@ class WitMotionSensor:
         """
         Pop the next valid 11-byte WitMotion packet from buffer.
         Returns (ptype, payload) or None if no complete valid packet is available.
+
+        Checksum mismatches increment self.chksum_error.
         """
         while len(buffer) >= 11:
             if buffer[0] != self._FRAME_HEADER:
@@ -1089,6 +1185,7 @@ class WitMotionSensor:
             packet = buffer[:11]
             if sum(packet[:-1]) & 0xFF != packet[-1]:
                 buffer.pop(0)
+                self.chksum_error += 1
                 continue
             del buffer[:11]
             return packet[1], bytes(packet[2:10])
@@ -1103,9 +1200,32 @@ class WitMotionSensor:
         = 9.80665 m/s²), angular velocity to rad/s, magnetic field to µT, and Euler angles
         to rad. Callers receive SI values exclusively; no further conversion is expected.
         """
+
         if ptype == 0x50:  # Time Packet
             _, _, _, hh, mi, ss, ms = struct.unpack("<BBBBBBH", payload)
-            self._sensor_time_ms = ms + ss * 1000 + mi * 60000 + hh * 3600000  # convert chip datetime to milliseconds
+            raw_time = self._days_counter * 86400 + hh * 3600 + mi * 60 + ss + ms * 0.001
+
+            # assign reference time based on first time package received
+            if self._ref_time is None:
+                self._ref_time = raw_time
+
+            # unwrap into monotonic time stamp
+            data_ts = raw_time - self._ref_time
+
+            # assign initial data timestamp
+            if self._data_ts is None:
+                self._data_ts = data_ts
+
+            # catch midnight resets
+            if data_ts < self._data_ts:
+                self._days_counter += 1
+                data_ts += 86400
+
+            self._sensor_data["time_s"] = data_ts
+
+            # store time states
+            self._inter_sample_periods = max(round((data_ts - self._data_ts) * self.rate), 1)
+            self._data_ts = data_ts
 
         elif ptype == 0x51:  # Acceleration & Temperature
             assert self.acc_range is not None, "acc_range not set — did connect() succeed?"
@@ -1148,43 +1268,36 @@ class WitMotionSensor:
             lst[2] = round(q2 / 32768.0, 5)  # y
             lst[3] = round(q3 / 32768.0, 5)  # z
 
-    def _commit_data(self):
+    def _estimate_true_host_ts(self):
         """
-        Updates Software PLL timestamp, hardware time unwrapping, and dispatches data.
+        Estimates the true host-side timestamp of the current frame using an α-filter
+        (first-order predictor-corrector) and writes the result to the sensor data.
+
+        host_time_s is anchored to imu_ts's own timescale at the first complete frame,
+        so their difference reflects true wire/parsing latency instead of an arbitrary
+        startup offset between two independently-zeroed clocks.
         """
-        t_pc = time.perf_counter()
-        if self._start_pc_time is None:
-            self._start_pc_time = t_pc
+        host_raw_time = time.perf_counter()
 
-        t_elapsed_pc = t_pc - self._start_pc_time
+        if self._host_ref_time is None:
+            self._host_ref_time = host_raw_time - self._sensor_data["time_s"]
 
-        # Unwrapped Monotonic Hardware Clock using day-based monotonic ms
-        t_s = None
-        if self._sensor_time_ms is not None:
-            if self._start_sensor_ms is None:
-                self._start_sensor_ms = self._sensor_time_ms
-            t_s = (self._sensor_time_ms - self._start_sensor_ms) / 1000.0
+        # noisy measurement of data timestamp in host
+        host_data_ts = host_raw_time - self._host_ref_time
 
-        # Update Software PLL timeline
-        if self._pll_t_est is None:
-            self._pll_t_est = t_elapsed_pc
-            pll_s = self._pll_t_est
+        if self._host_data_ts_estimate is None:
+            self._host_data_ts_estimate = host_data_ts
+
+        # estimate true data timestamp combining prediction with measurement correction (alpha filter)
         else:
-            dt_raw = t_elapsed_pc - self._pll_t_est
-            # Dynamic step sizing for cycle-slip robustness
-            steps = round(dt_raw / self._pll_sample_period)
-            if steps < 1:
-                steps = 1
-            t_pred = self._pll_t_est + steps * self._pll_sample_period
-            self._pll_t_est = self._pll_alpha * t_elapsed_pc + (1.0 - self._pll_alpha) * t_pred
-            pll_s = self._pll_t_est
+            # get or estimate number of inter-sample periods
+            if 0x50 in self._packet_ids:
+                n = self._inter_sample_periods
+            else:
+                n = max(round((host_data_ts - self._host_data_ts_estimate) * self.rate), 1)
 
-        # Save timestamps in data model
-        self._sensor_data["time_s"] = t_s
-        self._sensor_data["pll_time_s"] = pll_s
+            # time stamp prediction and measurement correction
+            self._host_data_ts_estimate += n / self.rate
+            self._host_data_ts_estimate += self._alpha * (host_data_ts - self._host_data_ts_estimate)
 
-        # Store a copy of the completed frame — only keys with data (excludes disabled outputs).
-        # Lists are shallow-copied so the consumer's frame is not aliased to the live buffer.
-        data_copy = {k: list(v) if isinstance(v, list) else v for k, v in self._sensor_data.items() if v is not None}
-        with self._queue_lock:
-            self._latest = data_copy
+        self._sensor_data["host_time_s"] = self._host_data_ts_estimate

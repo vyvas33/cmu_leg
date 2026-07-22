@@ -15,10 +15,10 @@ imu.close()
 import serial.tools.list_ports
 
 from cmu_leg.config.params import IMU
-from cmu_leg.hardware.witmotion.witapi import WitMotionSensor, discover_baud
+from cmu_leg.hardware.witmotion.hwt906 import WitMotionSensor, discover_baud
 from cmu_leg.types.sensors import IMUFrame
 
-_CH340_VID = 6790  # CH340 / QinHeng USB-serial bridge (the chip witapi scans for)
+_CH340_VID = 6790  # CH340 / QinHeng USB-serial bridge (the chip hwt906 scans for)
 
 
 def discover_imu_ports() -> list[tuple[str, str | None, str | None]]:
@@ -73,9 +73,9 @@ class IMUInterface:
         self.thigh = WitMotionSensor(port=thigh_port or IMU.thigh_port, baud_bps=thigh_baud or IMU.baud)
         self.foot = WitMotionSensor(port=foot_port or IMU.foot_port, baud_bps=foot_baud or IMU.baud)
 
-        # last pll_time_s to drive the freshness flag  
+        # last host_time_s to drive the freshness flag
         self._last_thigh_t = None
-        self._last_foot_t = None 
+        self._last_foot_t = None
 
     def connect(self) -> None:
         try:
@@ -88,8 +88,10 @@ class IMUInterface:
             raise
 
     def read(self) -> IMUFrame:
-        th = self.thigh.get_reading()
-        fo = self.foot.get_reading()
+        # latest_data is a non-destructive zero-order hold: it repeats the last
+        # frame until the parser thread overwrites it, hence the freshness flags.
+        th = self.thigh.latest_data
+        fo = self.foot.latest_data
 
         if th is None:
             thigh_acc = (0.0, 0.0, 0.0)
@@ -99,7 +101,7 @@ class IMUInterface:
         else:
             thigh_acc = tuple(th["acc"])
             thigh_gyro = tuple(th["gyro"])
-            thigh_time = th["pll_time_s"]
+            thigh_time = th["host_time_s"]
             thigh_fresh = True if thigh_time != self._last_thigh_t else False
             self._last_thigh_t = thigh_time
 
@@ -111,7 +113,7 @@ class IMUInterface:
         else:
             foot_acc = tuple(fo["acc"])
             foot_gyro = tuple(fo["gyro"])
-            foot_time = fo["pll_time_s"]
+            foot_time = fo["host_time_s"]
             foot_fresh = True if foot_time != self._last_foot_t else False
             self._last_foot_t = foot_time
 

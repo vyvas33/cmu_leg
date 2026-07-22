@@ -1,9 +1,9 @@
 import sys, time
-from cmu_leg.hardware.witmotion.witapi import WitMotionSensor, discover_port, discover_baud
+from cmu_leg.hardware.witmotion.hwt906 import WitMotionSensor, discover_port, discover_baud
 
 sensor = None
 try:
-    port = "/dev/ttyUSB0"  # replace with port name if known
+    port = discover_port()  # replace with port name if known
     baud = discover_baud(port)  # replace with sensor baud rate if known
     sensor = WitMotionSensor(port=port, baud_bps=baud)
 except (FileNotFoundError, ValueError, ConnectionError) as e:
@@ -20,18 +20,18 @@ try:
     sensor.stream()
 
     last_ts = None
-    deadline = time.perf_counter() + 2.0
+    deadline = time.perf_counter() + 5.0
     while time.perf_counter() < deadline:
-        data = sensor.get_reading()
-        if data is not None and data["pll_time_s"] != last_ts:
-            last_ts = data["pll_time_s"]
+        data = sensor.latest_data
+        if data is not None and data["host_time_s"] != last_ts:
+            last_ts = data["host_time_s"]
 
             a, g = data["acc"], data["gyro"]
             print(f"{last_ts:.3f}s | [{a[0]:.3f}, {a[1]:.3f}, {a[2]:.3f}] m/s²")
 
         time.sleep(0.5 / sensor.rate)  # oversampling by at least 2x to catch all new data
 
-except (ConnectionError, RuntimeError) as e:
+except (ConnectionError, RuntimeError) as e: 
     print(f"Error: {e}")
 finally:
     if sensor is not None:

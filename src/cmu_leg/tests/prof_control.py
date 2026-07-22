@@ -70,12 +70,12 @@ def main():
         rec = k >= N_WARM
 
         a0 = time.perf_counter()
-        state = se.get_state(frame, imu, k * 0.001)
+        state = se.get_state(frame, imu, k * 0.001, 0.001)
         state.standing = True
         a1 = time.perf_counter()
         desired = pc.compute(state, k * 0.001)
         a2 = time.perf_counter()
-        llo = llc.compute(state, desired_torque=desired, control_enabled=True)
+        llo = llc.compute(state, desired_torque=desired, control_enabled=True, dt=0.001)
         a3 = time.perf_counter()
         llc.to_drive_command(llo)
         a4 = time.perf_counter()

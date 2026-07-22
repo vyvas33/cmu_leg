@@ -70,14 +70,17 @@ def main():
     period = 0.001   # target loop period (s) -> ~1 kHz
     t0 = time.perf_counter()
     clk = t0
+    t_wall_prev = t0
     gc.collect()
     gc.freeze()
     gc.disable()
     try:
         while (t := time.perf_counter() - t0) < DURATION:
             clk += period
+            now = time.perf_counter()
+            dt, t_wall_prev = now - t_wall_prev, now
             raw = ec.read()
-            s = se.get_state(raw, IMUFrame(), t)   # encoder-only; empty IMU frame
+            s = se.get_state(raw, IMUFrame(), t, dt)   # encoder-only; empty IMU frame
             state_rec.append(t, s)
             frame_rec.append(t, raw)               # raw counts + Medulla timestamps
             knee_vel_filt.append(degrees(knee_vel_lp.compute(s.knee_velocity)))

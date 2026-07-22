@@ -40,6 +40,8 @@ def main():
 
     # hardware bringup
     ec = EtherCATInterface("eth0")
+    imu = IMUInterface()
+    imu.connect()
     ec.connect()
 
     # control
@@ -54,19 +56,22 @@ def main():
     clk = t0
     reached_enabled = False
     frame = ec.read()
+    t_prev = - PERIOD # so the first tick's dt is ~ PERIOD
 
     def run(duration: float, standing=False) -> None:
         """Tick at 1 kHz for `duration`"""
-        nonlocal clk, reached_enabled, frame
+        nonlocal clk, reached_enabled, frame, t_prev
         phase_start = time.perf_counter() - t0
         while (t := time.perf_counter() - t0) - phase_start < duration:
+            dt = t - t_prev
+            t_prev = t 
             clk += PERIOD
-            t_ctrl = clk - t0   # ideal uniform time, no OS jitter
-            state = se.get_state(frame, IMUFrame(), t_ctrl)
-            frame_log.append(t, frame)   # raw PDO that produced this state (ankle-encoder diagnosis)
+            imu_frame = imu.read()
+            state = se.get_state(frame, imu_frame, t, dt)
+            frame_log.append(t, frame)  
             state.standing = standing
-            desired_torque = pc.compute(state, t_ctrl)
-            llo = llc.compute(state, desired_torque=desired_torque,control_enabled=ec.control_enabled())
+            desired_torque = pc.compute(state, t)
+            llo = llc.compute(state, desired_torque=desired_torque,control_enabled=ec.control_enabled(), dt=dt)
             # only send non zero commands if standing is true, else send zeros, as even a small bias in measured torque can poison the low level controller.
             if standing:
                 drive_cmd = llc.to_drive_command(llo)
@@ -78,11 +83,12 @@ def main():
             frame = ec.write(drive_cmd)
             idle = clk - time.perf_counter()
 
-            state_log.append(t, state); torque_log.append(t, desired_torque); out_log.append(t, llo); drive_log.append(t, drive_cmd)
+            state_log.append(t, state); torque_log.append(t, desired_torque); out_log.append(t, llo); drive_log.append(t, drive_cmd); idle_time_log.append(t, idle)
     
             if not reached_enabled and ec.control_enabled():
                 reached_enabled = True
                 print(f"[{t:6.3f}s] control_enabled")
+
 
             if idle > 0:
                 time.sleep(idle)

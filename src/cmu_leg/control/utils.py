@@ -57,8 +57,20 @@ class Lowpass:
         return x
 
 class BackwardDifference:
-    def __init__(self, sample_time: float = COMMON.sample_time):
-        self._Ts = sample_time
+    """Discrete derivative on the caller's MEASURED dt.
+
+    dt is required, not defaulted to COMMON.sample_time, on purpose: a missed
+    call site should be a TypeError, not a silently wrong velocity. The loop
+    does overrun -- a logged 21 ms tick divided by a nominal 1 ms would report
+    21x the true rate, straight into the controllers.
+
+    dt is clamped to [COMMON.dt_min, COMMON.dt_max]; see CommonParams for why
+    both ends matter.
+    """
+
+    def __init__(self, dt_min: float = COMMON.dt_min, dt_max: float = COMMON.dt_max):
+        self._dt_min = dt_min
+        self._dt_max = dt_max
         self._u_prev: float | None = None
 
     # call reset whenever control_enabled changes to true
@@ -66,10 +78,11 @@ class BackwardDifference:
         # seed the delay with u0 so the next compute() returns 0
         self._u_prev = u0
 
-    def compute(self, u: float) -> float:
+    def compute(self, u: float, dt: float) -> float:
         if self._u_prev is None:
             self._u_prev = u
-        y = (u - self._u_prev) / self._Ts
+        dt = min(max(dt, self._dt_min), self._dt_max)
+        y = (u - self._u_prev) / dt
         self._u_prev = u
         return y
 

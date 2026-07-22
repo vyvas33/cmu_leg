@@ -45,7 +45,7 @@ class IMUFrame:
     thigh_gyro: tuple[float, float, float] = (0.0, 0.0, 0.0)  # rad/s
     foot_acc: tuple[float, float, float] = (0.0, 0.0, 0.0)    # m/s²
     foot_gyro: tuple[float, float, float] = (0.0, 0.0, 0.0)   # rad/s
-    thigh_time: float = 0.0    # pll_time_s from the driver
+    thigh_time: float = 0.0    # host_time_s from the driver
     foot_time: float = 0.0
     thigh_fresh: bool = False  # True if newer than the previous read()
     foot_fresh: bool = False

@@ -84,7 +84,7 @@ class LowLevelControl:
                 )
 
     def compute(self, state: ProsthesisState, desired_torque: TorqueDesired,
-                control_enabled: bool) -> LowLevelOutput:
+                control_enabled: bool, dt: float) -> LowLevelOutput:
 
         if not self._verified:
             raise NotImplementedError("Low Level Control not verified yet!")
@@ -107,12 +107,12 @@ class LowLevelControl:
         # enabled: run the full pipeline
         # knee pipeline
         knee_torque_commanded = self.knee_torque_conditioning.compute(state, desired_torque)
-        knee_velocity_desired, knee_motor_torque_ff_desired = self.knee_torque_controller.compute(state, knee_torque_commanded)
+        knee_velocity_desired, knee_motor_torque_ff_desired = self.knee_torque_controller.compute(state, knee_torque_commanded, dt)
         knee_velocity_commanded, knee_motor_torque_ff = self.knee_velocity_saturation.compute(state, knee_velocity_desired, knee_motor_torque_ff_desired)
 
         # ankle pipeline
         ankle_torque_commanded = self.ankle_torque_conditioning.compute(state, desired_torque)
-        ankle_velocity_desired, ankle_motor_torque_ff_desired = self.ankle_torque_controller.compute(state, ankle_torque_commanded)
+        ankle_velocity_desired, ankle_motor_torque_ff_desired = self.ankle_torque_controller.compute(state, ankle_torque_commanded, dt)
         ankle_velocity_commanded, ankle_motor_torque_ff = self.ankle_velocity_saturation.compute(state, ankle_velocity_desired, ankle_motor_torque_ff_desired)
 
         self._post_enable_ticks += 1

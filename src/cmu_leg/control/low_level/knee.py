@@ -110,10 +110,13 @@ class KneeTorqueController:
         self.knee_motor_damping = knee.motor_damping
         self.knee_motor_inertia = knee.motor_inertia
         self.knee_motor_eff = knee.motor_eff
-        self.sample_time = common.sample_time
 
-        self._dd_tau = BackwardDifference(self.sample_time)
-        self._dd_tau_dot = BackwardDifference(self.sample_time)
+        # Both differences run on the caller's measured dt. These two are the
+        # most dt-sensitive quantities in the stack: tau_ddot is a difference OF
+        # tau_dot, so a bad dt is compounded through both stages rather than
+        # just added, and the result feeds the drive feedforward.
+        self._dd_tau = BackwardDifference()
+        self._dd_tau_dot = BackwardDifference()
 
         # change to True once everything is verified as safe to use.
         self._verified = True
@@ -125,13 +128,14 @@ class KneeTorqueController:
 
     def compute(self,
                 state: ProsthesisState,
-                knee_torque_commanded: float) -> tuple[float, float]:
+                knee_torque_commanded: float,
+                dt: float) -> tuple[float, float]:
 
         if not self._verified:
             raise NotImplementedError("Knee Torque Controller not verified yet!")
 
-        knee_torque_commanded_dot = self._dd_tau.compute(knee_torque_commanded)
-        knee_torque_commanded_ddot = self._dd_tau_dot.compute(knee_torque_commanded_dot)
+        knee_torque_commanded_dot = self._dd_tau.compute(knee_torque_commanded, dt)
+        knee_torque_commanded_ddot = self._dd_tau_dot.compute(knee_torque_commanded_dot, dt)
 
         knee_torque_error = knee_torque_commanded - state.knee_torque_measured
         knee_velocity_desired = (state.knee_velocity

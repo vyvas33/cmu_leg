@@ -8,7 +8,7 @@ Step 2 — Recovery: if step 1 fails, blindly send 'set baud to 9600' at each ca
          starting from the highest, then save to flash at 9600 and verify.
 
 Usage:
-    python witrecovery.py
+    python recovery.py
 
 hgeyer, June 2026
 """
@@ -17,7 +17,8 @@ import sys
 import time
 
 import serial
-from witapi import WitMotionSensor, discover_baud, discover_port
+
+from hwt906 import WitMotionSensor, discover_baud, discover_port
 
 
 def discover_comm(port=None):
@@ -34,33 +35,38 @@ def discover_comm(port=None):
         port = discover_port()
         print(f"Found CH340 on port {port}.\n")
 
-    # Step 1: discovery
-    print("Probing baud rates ...")
-    detected = None
-    try:
-        detected = discover_baud(port)
-        print(f"  Detected at {detected} bps.")
-    except ConnectionError:
-        print("  No response at any baud rate.")
+    _blind_set_to_9600(port, 921600)
 
-    # Step 2: blind recovery to 9600
-    if detected is None:
-        print("\nAttempting blind recovery to 9600 bps ...")
-        for send_baud in sorted((b for b in WitMotionSensor._BAUD_MAP if b != 9600), reverse=True):
-            if _blind_set_to_9600(port, send_baud):
-                detected = 9600
-                break
-        if detected is None:
-            raise RuntimeError(
-                "Recovery failed. Sensor unresponsive at all baud rates. Check USB connection and sensor power."
-            )
+    
+    # # Step 1: discovery
+    # print("Probing baud rates ...")
+    # detected = None
+    # try:
+    #     detected = discover_baud(port)
+    #     print(f"  Detected at {detected} bps.")
+    # except ConnectionError:
+    #     print("  No response at any baud rate.")
+
+    # # Step 2: blind recovery to 9600
+    # if detected is None:
+    #     print("\nAttempting blind recovery to 9600 bps ...")
+    #     for send_baud in sorted((b for b in WitMotionSensor._BAUD_MAP if b != 9600), reverse=True):
+    #         if _blind_set_to_9600(port, send_baud):
+    #             detected = 9600
+    #             break
+    #     if detected is None:
+    #         raise RuntimeError(
+    #             "Recovery failed. Sensor unresponsive at all baud rates. Check USB connection and sensor power."
+    #         )
 
     print(" ")
-    sensor = WitMotionSensor(port=port, baud_bps=detected)
+    sensor = WitMotionSensor(port=port, baud_bps=9600)
     sensor.connect()
+    sensor.save_config()
     sensor.show_config()
+    
     sensor.disconnect()
-    return port, detected
+    return port, 9600
 
 
 def _write_to_sensor(ser, byte_array):
@@ -89,10 +95,12 @@ def _blind_set_to_9600(port, send_baud):
         return False
 
     try:
-        discover_baud(port)
-        print("success.")
-        print("Recovery baudrate 9600 saved to sensor flash memory.")
-        return True
+        baud = discover_baud(port)
+        print(baud)
+        if baud == 9600:
+            print("success.")
+            print("Recovery baudrate 9600 saved to sensor flash memory.")
+            return True
     except ConnectionError:
         print("no response at 9600.")
         return False
@@ -101,6 +109,7 @@ def _blind_set_to_9600(port, send_baud):
 if __name__ == "__main__":
     try:
         discover_comm()
+
     except (FileNotFoundError, ValueError, RuntimeError) as e:
         print(f"\nError: {e}")
         sys.exit(1)

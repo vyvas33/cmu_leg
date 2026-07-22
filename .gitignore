@@ -222,3 +222,6 @@ __marimo__/
 # Run outputs (plots, recordings from tool/diagnostic scripts)
 output/
 *_live.png
+
+# macOS
+.DS_Store

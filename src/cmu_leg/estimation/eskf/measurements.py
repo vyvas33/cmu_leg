@@ -1,4 +1,7 @@
-"""ESKF measurement models: each returns (r, H, V) for one sequential update.
+"""ESKF measurement models: each returns (r, V) for one sequential update.
+
+Every H is a 3x3 identity selecting one error-state block, so it is not built or
+returned -- eskf._kalman_update keys off the block start index (TH_DP/TH_DV/FO_DV).
 
 DRAFT -- verify signs, the error-state layout, and the V constructions before
 trusting. Runtime path only: numpy, no sympy. The closed forms here are
@@ -119,7 +122,8 @@ def Ad_inv_gft(a, k):
 
 
 # ---------------------------------------------------------------------------
-# Measurements. Each returns (r, H, V): r (m,), H (m,30), V (m,m).
+# Measurements. Each returns (r, V): r (3,), V (3,3). H is the implicit 3x3
+# identity selector at the block noted in each function; see eskf._kalman_update.
 # ---------------------------------------------------------------------------
 def meas_zupt(fo, sigma_zupt):
     """Zero-velocity update on the foot. h(x) = v_fo, y = 0.
@@ -128,12 +132,14 @@ def meas_zupt(fo, sigma_zupt):
     a subset of stance, not the same thing). This is the
     absolute anchor -- it corrects the foot directly (H on dv_fo), and pulls
     foot tilt + accel bias through P's cross-covariance.
+
+    Returns (r, V). H is the constant selector picking FO["dv"] (a 3x3 identity
+    at cols 24:27); _kalman_update keys off the block start directly instead of
+    forming the 3x30, so it is not returned. See FO_DV in eskf.py.
     """
-    H = np.zeros((3, N))
-    H[:, FO["dv"]] = np.eye(3)
     r = -fo.v                       # y - h = 0 - v_fo
     V = (sigma_zupt ** 2) * np.eye(3)
-    return r, H, V
+    return r, V
 
 
 def meas_pos_loop_closure(fo, th, enc, P, R_enc, R_model):
@@ -155,8 +161,8 @@ def meas_pos_loop_closure(fo, th, enc, P, R_enc, R_model):
     y = fo.p + R_fo @ p_ft
     r = y - th.p
 
-    H = np.zeros((3, N))
-    H[:, TH["dp"]] = np.eye(3)
+    # H is the constant selector picking TH["dp"] (3x3 identity at cols 6:9);
+    # _kalman_update keys off the block start (TH_DP) rather than the 3x30.
 
     # foot-pose uncertainty: d y = dp_fo - R_fo hat(p_ft) dtheta_fo
     H_dp = np.eye(3)
@@ -175,7 +181,7 @@ def meas_pos_loop_closure(fo, th, enc, P, R_enc, R_model):
     V_enc = R_fo @ J @ R_enc @ J.T @ R_fo.T
 
     V = V_foot + V_enc + R_model
-    return r, H, V
+    return r, V
 
 
 def meas_vel_loop_closure(fo, th, enc, theta_dot_enc, foot_gyro, P,
@@ -217,8 +223,8 @@ def meas_vel_loop_closure(fo, th, enc, theta_dot_enc, foot_gyro, P,
     y = R_th @ V_b_nt[:3]
     r = y - th.v
 
-    H = np.zeros((3, N))
-    H[:, TH["dv"]] = np.eye(3)
+    # H is the constant selector picking TH["dv"] (3x3 identity at cols 9:12);
+    # _kalman_update keys off the block start (TH_DV) rather than the 3x30.
 
     # foot-side states treated as measurement -> push into V. Linear-velocity
     # map is v_th_pred = R_th @ Ai[:3] @ V_b_nf; differentiate the foot blocks:
@@ -236,4 +242,4 @@ def meas_vel_loop_closure(fo, th, enc, theta_dot_enc, foot_gyro, P,
 
     V_rate = J_lin @ R_rate @ J_lin.T
     V = V_foot + V_rate + R_model
-    return r, H, V
+    return r, V

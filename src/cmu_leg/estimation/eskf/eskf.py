@@ -64,6 +64,15 @@ R_BODY_SENSOR_FO = np.array([[-1.0, 0.0, 0.0],
                              [ 0.0, 0.0, 1.0],
                              [ 0.0, 1.0, 0.0]])
 
+# Error-state block starts (thigh 0:15, foot 15:30; sub-order matches
+# measurements.py _blk: [dtheta, dw_b, dp, dv, da_b]). Each measurement's H is
+# a 3x3 identity at one of these, so _kalman_update takes the start index.
+TH_DP = 6     # thigh position   (pos loop closure)
+TH_DV = 9     # thigh velocity   (vel loop closure)
+FO_DV = 24    # foot velocity    (zupt)
+
+_I3 = np.eye(3)   # read-only; scaled copies only, never mutated in place
+
 
 class ESKF:
     def __init__(self, cfg: ESKFConfig | None = None):
@@ -76,6 +85,14 @@ class ESKF:
                    + [cfg.p0_vel] * 3 + [cfg.p0_acc_bias] * 3)
         self.P = np.diag(p0_body * 2)
         self.del_x = np.zeros((30,))
+
+        # persistent transition buffer. A is block-diagonal (thigh 0:15, foot
+        # 15:30); each block is identity + 4 dt-blocks. The identity diagonal
+        # and the off-block zeros never change, so _set_A_block only rewrites
+        # the 8 live sub-blocks each tick -- no per-tick 30x30 / eye allocation.
+        self._A = np.zeros((30, 30))
+        np.fill_diagonal(self._A, 1.0)
+        self._diag30 = np.diag_indices(30)   # for adding the Q diagonal in place
 
         self._sig_th = (cfg.sigma_dtheta_thigh, cfg.sigma_gyr_thigh,
                         cfg.sigma_dv_thigh, cfg.sigma_acc_thigh)
@@ -217,22 +234,26 @@ class ESKF:
         self.fo.p = self.fo.p + self.fo.v * dt + 0.5 * (a_n_fo + self.g) * dt**2
         self.fo.v = self.fo.v + (a_n_fo + self.g) * dt
 
-        # error-state transition and process noise, one block per body
-        A = np.zeros((30, 30))
-        A[0:15, 0:15] = self._get_A(R_th, a_n_th, dt)
-        A[15:30, 15:30] = self._get_A(R_fo, a_n_fo, dt)
-        Q = np.zeros((30, 30))
-        Q[0:15, 0:15] = self._get_Q(self._sig_th, R_th, a_corr_th, w_corr_th,
-                                    self._prev_corr_th, dt)
-        Q[15:30, 15:30] = self._get_Q(self._sig_fo, R_fo, a_corr_fo, w_corr_fo,
-                                      self._prev_corr_fo, dt)
+        # error-state transition (rewrite the 8 live blocks of the persistent
+        # buffer) and process noise (diagonal, carried as a 30-vector)
+        self._set_A_block(0, R_th, a_n_th, dt)
+        self._set_A_block(15, R_fo, a_n_fo, dt)
+        A = self._A
+        q_diag = np.concatenate((
+            self._get_Q(self._sig_th, R_th, a_corr_th, w_corr_th,
+                        self._prev_corr_th, dt),
+            self._get_Q(self._sig_fo, R_fo, a_corr_fo, w_corr_fo,
+                        self._prev_corr_fo, dt)))
         self._prev_corr_th = (a_corr_th, w_corr_th)
         self._prev_corr_fo = (a_corr_fo, w_corr_fo)
 
         # propagate covariance (del_x itself is always zero here, so it is not
-        # propagated: every correction injects and resets it)
-        # del_x = A @ del_x 
-        self.P = A @ self.P @ A.T + Q
+        # propagated: every correction injects and resets it). Q is diagonal, so
+        # it adds to P's diagonal rather than as a full 30x30 matrix.
+        # del_x = A @ del_x
+        P = A @ self.P @ A.T
+        P[self._diag30] += q_diag
+        self.P = P
 
     def _get_Q(self, sig, R_nb, acc_corr, gyr_corr, prev_corr, dt):
         # white-noise variances over one step
@@ -247,20 +268,21 @@ class ESKF:
             prev_acc, prev_gyr = prev_corr
             aa = (R_nb @ (gyr_corr - prev_gyr) / 2 * dt) ** 2 + a
             cc = (R_nb @ (acc_corr - prev_acc) / 2 * dt) ** 2 + c
-            return np.diag([aa[0], aa[1], aa[2], b, b, b, 0, 0, 0,
-                            cc[0], cc[1], cc[2], d, d, d])
+            return np.array([aa[0], aa[1], aa[2], b, b, b, 0, 0, 0,
+                             cc[0], cc[1], cc[2], d, d, d])
 
-        return np.diag([a, a, a, b, b, b, 0, 0, 0, c, c, c, d, d, d])
+        return np.array([a, a, a, b, b, b, 0, 0, 0, c, c, c, d, d, d])
 
-    @staticmethod
-    def _get_A(R_nb, a_n, dt):
-        # LOCAL 
-        A = np.eye(15)
-        A[0:3, 3:6] = -dt * np.eye(3)          # ori  <- gyro bias
-        A[6:9, 9:12] = dt * np.eye(3)          # pos  <- vel
-        A[9:12, 0:3] = -dt * hat(a_n) @ R_nb   # vel  <- ori
-        A[9:12, 12:15] = -dt * R_nb            # vel  <- accel bias
-        return A
+    def _set_A_block(self, off, R_nb, a_n, dt):
+        # Rewrite the 4 dt-blocks of one 15x15 body block of the persistent A,
+        # at rows/cols [off:off+15]. The identity diagonal and all other zeros
+        # are already in place and never change. Same LOCAL form as before.
+        A = self._A
+        dtI = dt * _I3
+        A[off + 0:off + 3, off + 3:off + 6] = -dtI              # ori  <- gyro bias
+        A[off + 6:off + 9, off + 9:off + 12] = dtI              # pos  <- vel
+        A[off + 9:off + 12, off + 0:off + 3] = -dt * hat(a_n) @ R_nb   # vel <- ori
+        A[off + 9:off + 12, off + 12:off + 15] = -dt * R_nb     # vel  <- accel bias
 
     def _correct(self, a_m_fo, w_m_fo, fo_fresh: bool, state: ProsthesisState):
         theta_dot = np.array([state.ankle_velocity, state.knee_velocity])
@@ -271,24 +293,35 @@ class ESKF:
         if fo_fresh:
             self._zupt_active = self._zupt_fo.update(a_m_fo, w_m_fo)
         if self._zupt_active:
-            r, H, V = meas_zupt(self.fo, self.sigma_zupt)
-            self._kalman_update(r, H, V)
+            r, V = meas_zupt(self.fo, self.sigma_zupt)
+            self._kalman_update(r, FO_DV, V)
 
         # encoders tie the thigh to the foot: position, then velocity
-        r, H, V = meas_pos_loop_closure(
+        r, V = meas_pos_loop_closure(
             self.fo, self.th, state, self.P, self.R_enc, self.R_model_pos)
-        self._kalman_update(r, H, V)
+        self._kalman_update(r, TH_DP, V)
 
-        r, H, V = meas_vel_loop_closure(
+        r, V = meas_vel_loop_closure(
             self.fo, self.th, state, theta_dot, w_m_fo, self.P,
             self.R_rate, self.R_model_vel)
-        self._kalman_update(r, H, V)
+        self._kalman_update(r, TH_DV, V)
 
-    def _kalman_update(self, r, H, V):
-        # gain, error estimate, covariance update (Joseph form)
-        K = self.P @ H.T @ np.linalg.inv(H @ self.P @ H.T + V)
+    def _kalman_update(self, r, b, V):
+        # Every measurement's H is a 3x3 identity selecting the error-state
+        # block at column b (b:b+3), so the full 30x30 Joseph form collapses to
+        # slices: H @ P == P[b:b+3, :], P @ H.T == P[:, b:b+3]. This is the SAME
+        # Joseph update (I-KH) P (I-KH).T + K V K.T, just with the zeros of H
+        # skipped -- no 3x30 H, no 30x30 eye, one 3x3 inverse.
+        P = self.P
+        Pcol = P[:, b:b + 3]                     # P @ H.T          (30x3)
+        Prow = P[b:b + 3, :]                      # H @ P            (3x30)
+        S = Prow[:, b:b + 3] + V                  # H P H.T + V      (3x3)
+        K = Pcol @ np.linalg.inv(S)               # gain             (30x3)
         self.del_x = K @ r
-        self.P = (np.eye(30) - K @ H) @ self.P @ (np.eye(30) - K @ H).T + K @ V @ K.T
+
+        MP = P - K @ Prow                         # (I - K H) P      (30x30)
+        # (I - K H) P (I - K H).T + K V K.T; MP @ (I-KH).T touches cols b:b+3
+        self.P = MP - MP[:, b:b + 3] @ K.T + K @ V @ K.T
 
         # inject the error into each nominal state
         for body, offset in ((self.th, 0), (self.fo, 15)):

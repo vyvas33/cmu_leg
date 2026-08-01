@@ -67,8 +67,8 @@ def run(dt, tmax, state_buf, cmd_buf, start_barrier, stop_event, start_time,
         state = ProsthesisState()   # working copy, overwritten from B2 each tick
 
         num_cycles = floor(tmax / dt) + 1
-        torque_log = Recorder("torque")   # TorqueDesired each tick
-        timing_log = Recorder("idle")     # LoopStats
+        torque_log = Recorder("high_torque")   # TorqueDesired each tick
+        timing_log = Recorder("high_idle")     # LoopStats
 
         completion_stage = 1
 

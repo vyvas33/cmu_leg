@@ -87,10 +87,10 @@ def run(dt, tmax, buffer, cmd_buf, start_barrier, stop_event, start_time,
 
         # preallocate logs (memory-only append in the loop; disk write at teardown)
         num_cycles = floor(tmax / dt) + 1
-        state_log = Recorder("state")     # ProsthesisState each tick
-        frame_log = Recorder("frame")     # raw EtherCAT frame each tick
-        drive_log = Recorder("drive")     # DriveCommand the loop WOULD send
-        timing_log = Recorder("idle")     # LoopStats (idle margin + measured dt)
+        state_log = Recorder("low_state")     # ProsthesisState each tick
+        frame_log = Recorder("low_frame")     # raw EtherCAT frame each tick
+        drive_log = Recorder("low_drive")     # DriveCommand the loop WOULD send
+        timing_log = Recorder("low_idle")     # LoopStats (idle margin + measured dt)
 
         completion_stage = 1
         init_evnt.set()   # hardware up -> parent may now spawn the estimator

@@ -79,8 +79,8 @@ def run(dt, tmax, buffer, state_buf, start_barrier, stop_event, start_time,
         state = ProsthesisState()   # this process's OWN local bus
 
         num_cycles = floor(tmax / dt) + 1
-        state_log = Recorder("state")    # full ProsthesisState (incl. hip_*)
-        timing_log = Recorder("idle")    # LoopStats (idle margin + measured dt)
+        state_log = Recorder("est_state")    # full ProsthesisState (incl. hip_*)
+        timing_log = Recorder("est_idle")    # LoopStats (idle margin + measured dt)
 
         completion_stage = 1
 

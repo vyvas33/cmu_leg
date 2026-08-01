@@ -16,7 +16,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from cmu_leg.estimation.state_estimator import StateEstimator
+from cmu_leg.estimation.state_estimator import ProsthesisStateEstimator
 from cmu_leg.hardware.ethercat_io import EtherCATInterface
 from cmu_leg.types.sensors import IMUFrame
 from cmu_leg.utility.utils import make_run_dir
@@ -54,7 +54,7 @@ def _plot_idle(t, idle_ms, out):
 def main():
     ec = EtherCATInterface("eth0")
     ec.connect()
-    se = StateEstimator()
+    se = ProsthesisStateEstimator()
     print(f"Recording for {DURATION} seconds")
 
     state_rec = Recorder("state")    # full ProsthesisState per tick -> state.csv

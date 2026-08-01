@@ -13,7 +13,7 @@ from cmu_leg.hardware.ethercat_io import EtherCATInterface
 from cmu_leg.hardware.imu_io import IMUInterface
 
 # control stages (run in order each tick)
-from cmu_leg.estimation.state_estimator import StateEstimator
+from cmu_leg.estimation.state_estimator import ProsthesisStateEstimator
 from cmu_leg.control.high_level_control import ProsthesisControl
 from cmu_leg.control.low_level_control import LowLevelControl
 
@@ -45,7 +45,7 @@ def main():
     ec.connect()
 
     # control
-    se = StateEstimator()
+    se = ProsthesisStateEstimator()
     pc = ProsthesisControl()
     llc = LowLevelControl()
     

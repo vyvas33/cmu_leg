@@ -23,7 +23,7 @@ import time
 import math
 import statistics
 
-from cmu_leg.estimation.state_estimator import StateEstimator
+from cmu_leg.estimation.state_estimator import ProsthesisStateEstimator
 from cmu_leg.control.high_level_control import ProsthesisControl
 from cmu_leg.control.low_level_control import LowLevelControl
 from cmu_leg.types.sensors import RawEtherCATFrame, IMUFrame
@@ -58,7 +58,7 @@ def _make_frame(k):
 
 
 def main():
-    se = StateEstimator()
+    se = ProsthesisStateEstimator()
     pc = ProsthesisControl()
     llc = LowLevelControl()
     imu = IMUFrame()

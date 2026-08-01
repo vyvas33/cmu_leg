@@ -4,8 +4,8 @@ from dataclasses import dataclass
 class ProsthesisState:
     """The control bus. Two writers with disjoint field ownership:
       - physical fields (angles/velocities/torques/grf/kinematics) — written by
-        the StateEstimator from sensors. The hip_* fields are the exception in
-        practice: the ESKF that StateEstimator owns writes them itself, from
+        the ProsthesisStateEstimator from sensors. The hip_* fields are the exception in
+        practice: the ESKF that ProsthesisStateEstimator owns writes them itself, from
         the thigh IMU, and only once its init window has closed (see
         ESKF.initialized) — before that they hold their previous value.
       - mode fields (below) — written by the supervisor, NOT the estimator.

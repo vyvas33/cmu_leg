@@ -8,7 +8,7 @@ the error-state Kalman filter" (2017, arXiv:1711.02508v1)
 Follows Haosen (Russell) Xing's implementation of ESKF.
 
 Usage:
-    class StateEstimator:
+    class ProsthesisStateEstimator:
         def __init__(self):
             self._eskf = ESKF()            # or ESKF(cfg) to override ESKF_CFG
 
@@ -193,7 +193,7 @@ class ESKF:
         hip_velocity comes off the gyro
 
         hip_accel is deliberately not written: it needs a differentiator, and
-        StateEstimator already owns all of those.
+        ProsthesisStateEstimator already owns all of those.
         """
         if not self.initialized:
             # leave the previous values on the bus rather than publishing an

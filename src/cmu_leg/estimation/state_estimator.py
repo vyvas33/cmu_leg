@@ -1,33 +1,35 @@
 """
-Uses sensor readings to write the prosthesis's state. 
+Uses sensor readings to write the prosthesis's state.
+
+Composes the two halves of estimation for the single-process path:
+  - ProprioceptiveEstimator: proprioceptive physical state (encoders, halls,
+    backward-difference velocities). Runs in the low-level process.
+  - ESKF: IMU-derived hip_* via error-state Kalman filter. Runs in the
+    estimator process.
+Both write into ONE ProsthesisState bus (self.state is the proprioceptive
+estimator's state instance; the ESKF writes hip_* into that same object).
+get_state() runs them in order and stays the single-process fallback +
+byte-identical verification reference; the two runtime processes each drive one
+half directly.
 """
 
 from cmu_leg.types.state import ProsthesisState
 from cmu_leg.types.sensors import RawEtherCATFrame
 from cmu_leg.types.sensors import IMUFrame
-from cmu_leg.estimation.encoders import convert_encoders
+from cmu_leg.estimation.proprioceptive_estimator import ProprioceptiveEstimator
 from cmu_leg.control.utils import BackwardDifference
-from cmu_leg.control.utils import MedianFilter
-from cmu_leg.control.utils import Lowpass
-from cmu_leg.config.params import ENCODERS, COMMON
 from cmu_leg.estimation.eskf.eskf import ESKF
 
-class StateEstimator:
+
+class ProsthesisStateEstimator:
     def __init__(self):
-        self._knee_vel = BackwardDifference()
-        self._knee_motor_vel = BackwardDifference()
-        self._ankle_vel = BackwardDifference()
-        self._ankle_motor_vel = BackwardDifference()
-        self._ankle_spring_vel = BackwardDifference() ##this needs to be discussed
-        self.state = ProsthesisState()
-        self._ankle_median = MedianFilter()
+        self._proprio = ProprioceptiveEstimator()
         self._eskf = ESKF()
         self._hip_accel = BackwardDifference()
-
-        # hall GRF proxy lowpass (baseline: Cheby-II 10 Hz; Butterworth stand-in)
-        self._toe_grf_lp = Lowpass(cutoff_freq=10.0, sample_rate=COMMON.sample_rate, order=2)
-        self._heel_grf_lp = Lowpass(cutoff_freq=10.0, sample_rate=COMMON.sample_rate, order=2)
-
+        # Share the proprioceptive estimator's bus: the ESKF writes hip_* into
+        # this same instance. ProprioceptiveEstimator only mutates fields in
+        # place, never rebinds .state, so the alias holds for the estimator's life.
+        self.state = self._proprio.state
 
     def get_state(self, frame: RawEtherCATFrame, imu: IMUFrame, t: float,
                   dt: float) -> ProsthesisState:
@@ -36,52 +38,10 @@ class StateEstimator:
         the MEASURED elapsed time since the previous tick, not the nominal
         period; everything that differentiates or integrates uses it.
         """
-        self._apply_encoders(frame, dt)
-        self._apply_hall_grfs(frame)
+        self._proprio.update(frame, dt)
         self._apply_eskf(imu, t, dt)
 
         return self.state
-
-    def _apply_hall_grfs(self, frame: RawEtherCATFrame):
-        toe = ENCODERS.hall_0_offset - frame.hall_0
-        heel = ENCODERS.hall_1_offset - frame.hall_1
-
-        self.state.toe_grf = self._toe_grf_lp.compute(toe)
-        self.state.heel_grf = self._heel_grf_lp.compute(heel)
-
-    def _apply_encoders(self, frame: RawEtherCATFrame, dt: float):
-        enc_read = convert_encoders(frame=frame, ankle_median=self._ankle_median)
-
-        knee_angle = enc_read.knee_angle
-        knee_motor_angle = enc_read.knee_motor_angle
-        ankle_angle = enc_read.ankle_angle
-        ankle_motor_angle = enc_read.ankle_motor_angle
-        knee_torque = enc_read.knee_torque
-        ankle_torque = enc_read.ankle_torque
-
-        ankle_spring_angle = enc_read.ankle_spring_angle
-
-        knee_velocity = self._knee_vel.compute(knee_angle, dt)
-        knee_motor_velocity = self._knee_motor_vel.compute(knee_motor_angle, dt)
-
-        ankle_velocity = self._ankle_vel.compute(ankle_angle, dt)
-        ankle_motor_velocity= self._ankle_motor_vel.compute(ankle_motor_angle, dt)
-        ankle_spring_velocity = self._ankle_spring_vel.compute(ankle_spring_angle, dt)
-
-        self.state.knee_angle = knee_angle
-        self.state.knee_velocity = knee_velocity
-        self.state.ankle_angle = ankle_angle
-        self.state.ankle_velocity = ankle_velocity
-        self.state.ankle_spring_angle = ankle_spring_angle
-        self.state.ankle_spring_velocity = ankle_spring_velocity
-
-        self.state.knee_torque_measured = knee_torque
-        self.state.ankle_torque_measured = ankle_torque
-
-        self.state.knee_motor_angle = knee_motor_angle
-        self.state.knee_motor_velocity = knee_motor_velocity
-        self.state.ankle_motor_angle = ankle_motor_angle
-        self.state.ankle_motor_velocity = ankle_motor_velocity
 
     def _apply_eskf(self, imu: IMUFrame, t: float, dt: float):
         # update() writes hip_angle / hip_velocity onto self.state itself, and
@@ -89,14 +49,3 @@ class StateEstimator:
         self._eskf.update(imu, self.state, t, dt)
         if self._eskf.initialized:
             self.state.hip_accel = self._hip_accel.compute(self.state.hip_velocity, dt)
-
-
-
-        
-
-
-
-        
-
-
-        

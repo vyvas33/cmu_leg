@@ -41,6 +41,7 @@ import math
 import struct
 import threading
 import time
+import traceback
 from collections import deque
 
 import serial
@@ -269,6 +270,8 @@ class WitMotionSensor:
     _OUTPUT_LIST_FIELDS = {
         0x51: ("acc", 3), 0x52: ("gyro", 3), 0x53: ("angle", 3), 0x54: ("mag", 3), 0x59: ("quat", 4)
     }
+    # RSW register 0x02 bitmask layout: (bit index, packet ID) in hardware transmission order.
+    _RSW_BITS = ((0, 0x50), (1, 0x51), (2, 0x52), (3, 0x53), (4, 0x54), (9, 0x59))
     # fmt: on
 
     def __init__(self, port: str | None = None, baud_bps: int = 921600):
@@ -410,6 +413,14 @@ class WitMotionSensor:
         self.acc_range = float({v: k for k, v in self._ACC_RANGE_MAP.items()}[range_regs[1]])
         self._acc_ndigits = math.ceil(-math.log10(self.acc_range / 32768.0 * self._STANDARD_GRAVITY))
         self._gyro_ndigits = math.ceil(-math.log10(self.gyro_range / 32768.0 * (math.pi / 180.0)))
+
+        # Sync the device's current output selection (RSW register 0x02) into driver
+        # state so _packet_ids reflects what the hardware actually streams. This lets
+        # stream() work against the on-board config without a mandatory set_outputs()
+        # call, and keeps the parser's provisioned slots aligned with the wire.
+        rsw = self._read_registers(0x02, 1)[0]
+        self._packet_ids = {pid for bit, pid in self._RSW_BITS if rsw & (1 << bit)}
+        self._trigger_packet_id = max(self._packet_ids) if self._packet_ids else None
 
     @_config_only
     def sleep(self):
@@ -623,16 +634,10 @@ class WitMotionSensor:
         """
         # self._check_bandwidth(sum((ts, acc, gyro, ang, mag, quat)), self.rate, self.baud)
 
+        requested = {0x50: ts, 0x51: acc, 0x52: gyro, 0x53: ang, 0x54: mag, 0x59: quat}
         val, active = 0, set()
-        for enabled, bit, pid in [
-            (ts, 0, 0x50),
-            (acc, 1, 0x51),
-            (gyro, 2, 0x52),
-            (ang, 3, 0x53),
-            (mag, 4, 0x54),
-            (quat, 9, 0x59),
-        ]:
-            if enabled:
+        for bit, pid in self._RSW_BITS:
+            if requested[pid]:
                 val |= 1 << bit
                 active.add(pid)
 
@@ -640,6 +645,16 @@ class WitMotionSensor:
             raise ValueError("At least one output must remain enabled.")
 
         self._write_register(0x02, val)
+
+        # Verify the write landed. _write_register is fire-and-forget, and an unapplied
+        # RSW change leaves the device streaming a different set than _packet_ids expects,
+        # which surfaces later as a parser-thread crash on an unprovisioned slot.
+        readback = self._read_registers(0x02, 1)[0]
+        if readback != val:
+            raise RuntimeError(
+                f"RSW output register write failed: wrote {val:#06x}, device reports {readback:#06x}. "
+                "Config did not take — retry, and check that the sensor is not streaming during set_outputs()."
+            )
 
         # Configure local trigger packet to match the last packet in transmission order
         self._packet_ids = active
@@ -956,16 +971,10 @@ class WitMotionSensor:
         offsets = self.get_offsets()
 
         rsw = chunk1[0]
+        rsw_labels = {0x50: "Time", 0x51: "Acc", 0x52: "Gyro", 0x53: "Angle", 0x54: "Mag", 0x59: "Quat"}
         enabled_outputs = [
-            f"{lbl} ({pid})"
-            for bit, lbl, pid in [
-                (0, "Time", "0x50"),
-                (1, "Acc", "0x51"),
-                (2, "Gyro", "0x52"),
-                (3, "Angle", "0x53"),
-                (4, "Mag", "0x54"),
-                (9, "Quat", "0x59"),
-            ]
+            f"{rsw_labels[pid]} ({pid:#04x})"
+            for bit, pid in self._RSW_BITS
             if rsw & (1 << bit)
         ]
         print(f"Active Modalities (RSW 0x02):   {', '.join(enabled_outputs)}")
@@ -1151,6 +1160,11 @@ class WitMotionSensor:
                         if result is None:
                             break
                         ptype, payload = result
+                        # The device retains its on-board output register across sessions, so it
+                        # may stream packet types the current set_outputs() did not provision a
+                        # slot for. Ignore those instead of assigning into a None slot.
+                        if ptype not in self._packet_ids:
+                            continue
                         self._parse_packet_payload(ptype, payload)  # parse packet payload
                         received_this_cycle.add(ptype)
                         if ptype == self._trigger_packet_id:
@@ -1170,6 +1184,7 @@ class WitMotionSensor:
                     time.sleep(0.5 / self.rate)
         except Exception as e:
             print(f"\n[Parsing thread crash] {type(e).__name__}: {e}")
+            traceback.print_exc()
 
     def _next_packet(self, buffer):
         """

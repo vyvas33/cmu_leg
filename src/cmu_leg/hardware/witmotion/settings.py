@@ -86,7 +86,7 @@ def main():
 
         # Active output modalities (register 0x02)
         # Each flag enables the corresponding data packet in the stream.
-        sensor.set_outputs(ts=False, acc=True, gyro=True, ang=False, mag=True, quat=False)
+        sensor.set_outputs(ts=True, acc=True, gyro=True, ang=False, mag=False, quat=False)
 
         # Gyroscope full-scale range (register 0x20)
         # Options: 250, 500, 1000, 2000 dps

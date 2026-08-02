@@ -1295,7 +1295,11 @@ class WitMotionSensor:
         host_raw_time = time.perf_counter()
 
         if self._host_ref_time is None:
-            self._host_ref_time = host_raw_time - self._sensor_data["time_s"]
+            # Anchor host_time_s to the sensor's own timescale when the time packet (0x50)
+            # is streamed; otherwise there is no imu_ts to align to, so anchor to the host
+            # clock zeroed at the first complete frame (host_time_s starts at 0).
+            sensor_ts = self._sensor_data["time_s"]
+            self._host_ref_time = host_raw_time - (sensor_ts if sensor_ts is not None else 0.0)
 
         # noisy measurement of data timestamp in host
         host_data_ts = host_raw_time - self._host_ref_time

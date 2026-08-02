@@ -3,7 +3,7 @@ from cmu_leg.hardware.witmotion.hwt906 import WitMotionSensor, discover_port, di
 
 sensor = None
 try:
-    port = discover_port()  # replace with port name if known
+    port = "/dev/ttyUSB1"  # replace with port name if known
     baud = discover_baud(port)  # replace with sensor baud rate if known
     sensor = WitMotionSensor(port=port, baud_bps=baud)
 except (FileNotFoundError, ValueError, ConnectionError) as e:

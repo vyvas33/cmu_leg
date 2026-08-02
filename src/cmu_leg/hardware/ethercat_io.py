@@ -105,7 +105,7 @@ class EtherCATInterface:
     def connect(self) -> None:
         try:
             self._bring_up()
-            print("Connected")
+            print("EtherCAT Connected")
         except Exception:
             self.master.close()
             raise

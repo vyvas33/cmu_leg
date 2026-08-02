@@ -18,7 +18,7 @@ import time
 
 import serial
 
-from hwt906 import WitMotionSensor, discover_baud, discover_port
+from cmu_leg.hardware.witmotion.hwt906 import WitMotionSensor, discover_baud, discover_port
 
 
 def discover_comm(port=None):
@@ -32,10 +32,10 @@ def discover_comm(port=None):
         RuntimeError: Recovery failed at all baud rates.
     """
     if port is None:
-        port = discover_port()
+        port = "/dev/ttyUSB1" #discover_port()
         print(f"Found CH340 on port {port}.\n")
 
-    _blind_set_to_9600(port, 921600)
+    _blind_set_to_9600(port, 115200)
 
     
     # # Step 1: discovery

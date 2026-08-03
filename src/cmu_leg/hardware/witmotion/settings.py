@@ -37,7 +37,7 @@ def main():
     print("Discovering sensor port and baudrate.")
     sensor = None
     try:
-        port = "/dev/ttyUSB1"
+        port = "/dev/ttyUSB0"
         baud = discover_baud(port)
         sensor = WitMotionSensor(port=port, baud_bps=baud)
     except (FileNotFoundError, ValueError, ConnectionError) as e:
@@ -68,7 +68,7 @@ def main():
         # Options: 9600, 115200, 230400, 460800, 921600 bps
         # NOTE: takes effect immediately; disconnect/reconnect required before saving.
         if ENABLE_CHANGE_BAUDRATE:
-            sensor.set_baudrate(115200)
+            sensor.set_baudrate(921600)
             sensor.disconnect()
             time.sleep(0.5)
             print("\nReconnecting ...\n")

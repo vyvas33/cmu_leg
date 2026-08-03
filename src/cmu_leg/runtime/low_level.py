@@ -25,7 +25,7 @@ from cmu_leg.hardware.ethercat_io import EtherCATInterface
 from cmu_leg.estimation.proprioceptive_estimator import ProprioceptiveEstimator
 from cmu_leg.control.low_level_control import LowLevelControl
 from cmu_leg.types.commands import TorqueDesired, DriveCommand
-from cmu_leg.runtime.buffer import MedullaStateBuffer, CommandBuffer
+from cmu_leg.runtime.buffer import StateBuffer, CommandBuffer
 from cmu_leg.runtime.guard import ExIntGuard
 from cmu_leg.utility.recorder import Recorder
 
@@ -48,7 +48,8 @@ def run(dt, tmax, buffer, cmd_buf, start_barrier, stop_event, start_time,
         dt (float): Nominal loop period (s) -- steps the sleep-to-clock ONLY.
             Do NOT feed this to the estimator; it needs the MEASURED dt.
         tmax (float): Max elapsed time (s); fixes the integer cycle count.
-        buffer (MedullaStateBuffer): B1, low-level -> estimator. Sole writer.
+        buffer (StateBuffer): B1, low-level -> estimator. Sole writer; carries
+            the full proprioceptive ProsthesisState (hip_* still zero here).
         cmd_buf (CommandBuffer): B3, high-level -> low-level. Sole reader, with a
             staleness watchdog (see <7>).
         start_barrier (multiprocessing.Barrier): Trips once every process reaches
@@ -87,7 +88,7 @@ def run(dt, tmax, buffer, cmd_buf, start_barrier, stop_event, start_time,
 
         # preallocate logs (memory-only append in the loop; disk write at teardown)
         num_cycles = floor(tmax / dt) + 1
-        state_log = Recorder("low_state")     # ProsthesisState each tick
+        state_log = Recorder("low_prosthesis_state")  # ProsthesisState each tick
         frame_log = Recorder("low_frame")     # raw EtherCAT frame each tick
         drive_log = Recorder("low_drive")     # DriveCommand the loop WOULD send
         timing_log = Recorder("low_idle")     # LoopStats (idle margin + measured dt)
@@ -125,12 +126,9 @@ def run(dt, tmax, buffer, cmd_buf, start_barrier, stop_event, start_time,
             frame = ec.read()
             state = proprio.update(frame, dt_meas)
 
-            # publish the medulla-sourced subset to the estimator (B1)
-            buffer.publish(
-                state.knee_angle, state.ankle_angle,
-                state.knee_velocity, state.ankle_velocity,
-                state.toe_grf, state.heel_grf, t,
-            )
+            # publish the full proprioceptive state to the estimator (B1). hip_*
+            # is still zero here (no ESKF in low-level); the estimator overlays it.
+            buffer.publish(state)
 
             # --- read the high-level command (B3) through the watchdog -------
             cmd = cmd_buf.latest()

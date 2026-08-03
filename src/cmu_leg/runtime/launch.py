@@ -1,6 +1,10 @@
 """
-Multiprocess orchestrator (the parent). Builds the shared IPC objects, spawns
-the three child processes, and manages their lifecycle.
+Multiprocess launcher (the parent). Builds the shared IPC objects, spawns the
+three child processes, and manages their lifecycle.
+
+This is the multiprocess run entry point. It will eventually be folded into
+main.py once main becomes the multiprocess entry (today main.py is the
+single-process path), at which point this file goes away.
 
 Processes (all async, each its own ~1 kHz loop):
     low-level  -- EtherCAT + ProprioceptiveEstimator; writes B1, reads B3
@@ -8,8 +12,8 @@ Processes (all async, each its own ~1 kHz loop):
     high-level -- swappable controller; reads B2, writes B3
 
 Buffers:
-    B1 MedullaStateBuffer  low-level -> estimator
-    B2 StateBuffer         estimator -> high-level  (full ProsthesisState)
+    B1 StateBuffer         low-level -> estimator  (full proprioceptive state)
+    B2 StateBuffer         estimator -> high-level  (full state + hip_*)
     B3 CommandBuffer       high-level -> low-level  (torque + standing)
 
 Startup handshake:
@@ -23,7 +27,7 @@ The parent does not run a realtime loop and does not log; each child logs its ow
 trace into the shared run_dir. The parent monitors liveness and, on Ctrl-C /
 SIGTERM / a child fault (stop_event), terminates everything gracefully.
 
-Run:  uv run python -m cmu_leg.runtime.orchestrator
+Run:  uv run python -m cmu_leg.runtime.launch
 """
 
 import os
@@ -31,7 +35,7 @@ from multiprocessing import (Process, Event, Value, Barrier,
                              set_start_method, freeze_support)
 from time import perf_counter
 
-from cmu_leg.runtime.buffer import MedullaStateBuffer, StateBuffer, CommandBuffer
+from cmu_leg.runtime.buffer import StateBuffer, CommandBuffer
 from cmu_leg.runtime.guard import ExIntGuard
 from cmu_leg.runtime import low_level, estimator, high_level
 from cmu_leg.utility.utils import make_run_dir
@@ -48,8 +52,8 @@ def main():
     run_dir = make_run_dir("multiprocess")
 
     # --- shared IPC objects (built in the parent, passed to the children) ----
-    b1 = MedullaStateBuffer()     # low-level  -> estimator
-    b2 = StateBuffer()            # estimator  -> high-level
+    b1 = StateBuffer()            # low-level  -> estimator (full physical state)
+    b2 = StateBuffer()            # estimator  -> high-level (+ hip_*)
     b3 = CommandBuffer()          # high-level -> low-level
     stop_event = Event()          # any process -> shutdown everywhere
     init_evnt = Event()           # low-level -> "EtherCAT is up"

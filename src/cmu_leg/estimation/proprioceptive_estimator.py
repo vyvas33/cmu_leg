@@ -11,8 +11,8 @@ motor torque), so this is broader than any one board.
 This is the half of the estimator that runs in the low-level process; the ESKF
 (IMU-derived hip_*) half runs in the estimator process. ProsthesisStateEstimator composes
 this with the ESKF for the single-process path. The low-level process publishes
-only the medulla-sourced subset of this state (joint angles/velocities + GRFs)
-to the estimator via MedullaStateBuffer.
+this full proprioceptive state to the estimator over B1 (a StateBuffer); the
+estimator overlays hip_* and republishes the complete state on B2.
 """
 
 from cmu_leg.types.state import ProsthesisState

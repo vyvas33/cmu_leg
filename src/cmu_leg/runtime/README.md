@@ -13,17 +13,17 @@ reference.
   │      ▼                                               │
   │  ProprioceptiveEstimator.update(frame, dt_meas)     │
   │      │                                               │
-  │      ├──► MedullaStateBuffer.publish(...)   ── B1 ──┐│
-  │      │                                              ││
-  │  CommandBuffer.latest()  ◄──────────── B3 ──────┐   ││
-  │      │  (watchdog: stale → zero torque)          │   ││
-  │      ▼                                           │   ││
-  │  LowLevelControl.compute → DriveCommand          │   ││
-  │  (ec.write DEFERRED — logged, not actuated yet)  │   ││
-  └──────────────────────────────────────────────────┼──┼┘
-                                                      │  │ medulla subset
-        ┌────────── estimator process ──────────┐     │  ▼ (joints+GRF+t)
-        │  MedullaStateBuffer.latest() ◄─────────┼─────┼──┘
+  │      ├──► StateBuffer.publish(state)   ──── B1 ──┐  │
+  │      │                                           │  │
+  │  CommandBuffer.latest()  ◄──────────── B3 ──────┐│  │
+  │      │  (watchdog: stale → zero torque)         ││  │
+  │      ▼                                          ││  │
+  │  LowLevelControl.compute → DriveCommand         ││  │
+  │  (ec.write DEFERRED — logged, not actuated yet) ││  │
+  └───────────────────────────────────────────────┼─┼──┘
+                                                   │ │ full proprioceptive
+        ┌────────── estimator process ──────────┐  │ ▼ state (hip_* = 0)
+        │  StateBuffer.latest() ◄────────────────┼──┼─┘
         │      │                                 │     │
         │      ▼                                 │     │
         │  ESKF.update(imu, state, ...) → hip_*  │     │
@@ -70,8 +70,8 @@ the reader tell a fresh sample from a held repeat. Common mechanics live in the
 
 | Buffer | Class | Direction | Payload |
 |---|---|---|---|
-| B1 | `MedullaStateBuffer` | low-level → estimator | medulla subset: joint kinematics + GRFs + `t` |
-| B2 | `StateBuffer` | estimator → high-level | full physical `ProsthesisState` |
+| B1 | `StateBuffer` | low-level → estimator | full proprioceptive `ProsthesisState` (`hip_*` = 0) |
+| B2 | `StateBuffer` | estimator → high-level | full `ProsthesisState` (proprioceptive + `hip_*`) |
 | B3 | `CommandBuffer` | high-level → low-level | `TorqueDesired` (knee/ankle) + `standing` |
 
 Two rules:
@@ -106,9 +106,9 @@ command. This is safety-critical.
 
 ## Startup handshake
 
-1. The orchestrator spawns **low-level**. It inits EtherCAT (after spawn — the
+1. The launcher spawns **low-level**. It inits EtherCAT (after spawn — the
    pysoem master can't be pickled) and sets `init_evnt`.
-2. The orchestrator blocks on `init_evnt` and only then spawns **estimator** and
+2. The launcher blocks on `init_evnt` and only then spawns **estimator** and
    **high-level** — the consumers never come up before the hardware is confirmed
    live.
 3. All three hit a shared `Barrier(3)`. The first to trip it stamps a shared
@@ -136,17 +136,17 @@ parent never logs the per-tick trace; it only monitors and tears down.
 
 | File | What it is |
 |---|---|
-| `buffer.py` | `_SharedRecord` base + `MedullaStateBuffer` (B1) + `StateBuffer` (B2) + `CommandBuffer` (B3) |
+| `buffer.py` | `_SharedRecord` base + `StateBuffer` (B1 + B2) + `CommandBuffer` (B3) |
 | `low_level.py` | low-level process body (`run()` = the `Process` target) |
 | `estimator.py` | estimator process body |
 | `high_level.py` | high-level process body (the swappable controller) |
 | `guard.py` | `ExIntGuard` — SIGTERM/Ctrl-C/exception → set `stop_event`, run cleanup |
-| `orchestrator.py` | the parent: builds IPC, spawns + gates + monitors + terminates |
+| `launch.py` | the parent: builds IPC, spawns + gates + monitors + terminates |
 
 ## Running
 
 ```
-uv run python -m cmu_leg.runtime.orchestrator
+uv run python -m cmu_leg.runtime.launch
 ```
 
 ## Status
@@ -169,6 +169,6 @@ around, and all three processes agree on the stamped `start_time`.
 - Real EtherCAT/IMU bring-up, the `init_evnt` handshake, and guarded teardown
   saving all CSVs are untested on hardware.
 
-Knobs to set for hardware: `CORES` in `orchestrator.py` (isolated Jetson cores),
+Knobs to set for hardware: `CORES` in `launch.py` (isolated Jetson cores),
 `DT_EST`/`DT_HIGH` (at 1 kHz for bring-up), and `MAX_STALE_TICKS` (the B3
 watchdog threshold).

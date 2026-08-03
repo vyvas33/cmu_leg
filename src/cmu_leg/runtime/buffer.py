@@ -11,12 +11,14 @@ is initialized AFTER spawn).
 Rule for all of them: never compute under the lock -- copy in/out only.
 
 Buffers:
-  - MedullaStateBuffer (B1): low-level -> estimator. The medulla-derived subset
-    (joint kinematics + GRFs + timestamp).
-  - StateBuffer (B2): estimator -> high-level. The full physical ProsthesisState.
+  - StateBuffer: the full physical ProsthesisState. Used for BOTH hops that carry
+    state -- B1 (low-level -> estimator) and B2 (estimator -> high-level) are each
+    a StateBuffer. Low-level publishes the complete proprioceptive state on B1;
+    the estimator seeds its own state from it, overlays hip_* (ESKF), and
+    republishes the now-complete state on B2. One payload type, no field-picking.
   - CommandBuffer (B3): high-level -> low-level. Desired joint torques + the
     standing mode flag -- high-level emits a COMMAND, not a state, so this is
-    small and separate from B2.
+    small and separate.
 
 _SharedRecord holds the array/lock/seq mechanics; subclasses own the
 field<->slot mapping.
@@ -64,51 +66,7 @@ class _SharedRecord:
 
 
 # ====================================================================
-# B1: low-level -> estimator (medulla-derived subset)
-# ====================================================================
-
-class MedullaState(NamedTuple):
-    """One snapshot of the medulla-derived state (the low-level process's
-    body-sensor half). `t` is the low-level perf_counter stamp (shares the IMU
-    timebase for the ESKF staleness check); `seq` distinguishes fresh from held.
-    """
-    knee_angle: float
-    ankle_angle: float
-    knee_velocity: float
-    ankle_velocity: float
-    toe_grf: float
-    heel_grf: float
-    t: float
-    seq: int
-
-
-_MEDULLA_N = len(MedullaState._fields) - 1   # payload count (all but seq)
-
-
-class MedullaStateBuffer(_SharedRecord):
-    """Low-level -> estimator channel. Sole writer: the low-level process."""
-
-    def __init__(self):
-        super().__init__(_MEDULLA_N)
-
-    def publish(self, knee_angle: float, ankle_angle: float,
-                knee_velocity: float, ankle_velocity: float,
-                toe_grf: float, heel_grf: float, t: float) -> None:
-        """Writer (low-level). Args in MedullaState field order."""
-        self._publish((knee_angle, ankle_angle, knee_velocity,
-                       ankle_velocity, toe_grf, heel_grf, t))
-
-    def latest(self) -> MedullaState | None:
-        """Reader (estimator). None until the low-level has published once."""
-        snap = self._snapshot()
-        seq = int(snap[self._seq])
-        if seq == 0:
-            return None
-        return MedullaState(*snap[0:self._seq], seq)
-
-
-# ====================================================================
-# B2: estimator -> high-level (full physical ProsthesisState)
+# StateBuffer: full physical ProsthesisState -- used for B1 and B2
 # ====================================================================
 
 _STATE_FIELDS = [f.name for f in dataclass_fields(ProsthesisState)]
@@ -124,12 +82,20 @@ class StampedState(NamedTuple):
 
 
 class StateBuffer(_SharedRecord):
-    """Estimator -> high-level channel: the full assembled physical state.
+    """A one-directional latest-value channel carrying the full ProsthesisState.
+
+    Used for both state hops:
+      - B1 (low-level -> estimator): low-level publishes its complete
+        proprioceptive state (hip_* still zero -- it runs no ESKF). The estimator
+        seeds its own state from this, then overlays hip_*.
+      - B2 (estimator -> high-level): the estimator republishes the now-complete
+        state (proprioceptive + hip_*).
 
     Writer ownership: whoever publishes owns every value, so a field is only
     authoritative on the hop where its writer produces it. `standing` is a mode
-    field the ESTIMATOR does not set, so it is inert here (high-level sets its
-    own). It rides along only because it is part of the dataclass.
+    field neither low-level nor the estimator authors (high-level owns it and
+    sends it DOWN on B3), so it is inert on both B1 and B2. It rides along only
+    because it is part of the dataclass.
 
     The lone bool (`standing`) is stored as 1.0/0.0 in the 'd' array and decoded
     back to bool on read.

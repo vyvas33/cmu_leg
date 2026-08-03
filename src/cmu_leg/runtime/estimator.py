@@ -2,10 +2,10 @@
 Estimator process body. Runs as a child process.
 
 Owns the two USB IMUs and the ESKF (and, in later phases, the whole high-level
-controller). Each tick: reads the IMUs, pulls the latest medulla-derived state
-off the shared MedullaStateBuffer, runs the ESKF to produce hip_*, and logs the
-full ProsthesisState. It NEVER runs proprioceptive estimation -- the joint
-kinematics come from the buffer, already differentiated by the low-level process.
+controller). Each tick: reads the IMUs, pulls the latest full ProsthesisState off
+the shared B1 StateBuffer, runs the ESKF to overlay hip_*, and logs the complete
+state. It NEVER runs proprioceptive estimation -- the physical state comes from
+the buffer, already assembled + differentiated by the low-level process.
 
 Symmetric to runtime/low_level.py: a run() Process target, hardware initialized
 AFTER spawn (USB handles can't be pickled), a completion_stage-guarded teardown,
@@ -22,7 +22,7 @@ from cmu_leg.hardware.imu_io import IMUInterface
 from cmu_leg.estimation.eskf.eskf import ESKF
 from cmu_leg.control.utils import BackwardDifference
 from cmu_leg.types.state import ProsthesisState
-from cmu_leg.runtime.buffer import MedullaStateBuffer, StateBuffer
+from cmu_leg.runtime.buffer import StateBuffer
 from cmu_leg.runtime.guard import ExIntGuard
 from cmu_leg.utility.recorder import Recorder
 
@@ -43,7 +43,8 @@ def run(dt, tmax, buffer, state_buf, start_barrier, stop_event, start_time,
         dt (float): Nominal loop period (s) -- steps the sleep-to-clock ONLY.
             Bring-up at the low-level rate first, then drop to ~500 Hz.
         tmax (float): Max elapsed time (s); fixes the integer cycle count.
-        buffer (MedullaStateBuffer): B1, low-level -> estimator. Sole reader.
+        buffer (StateBuffer): B1, low-level -> estimator. Sole reader; carries
+            the full proprioceptive ProsthesisState (hip_* zero until we overlay).
         state_buf (StateBuffer): B2, estimator -> high-level. Sole writer.
         start_barrier (multiprocessing.Barrier): Time-sync with the low-level
             process; its action stamps the shared start_time.
@@ -79,7 +80,7 @@ def run(dt, tmax, buffer, state_buf, start_barrier, stop_event, start_time,
         state = ProsthesisState()   # this process's OWN local bus
 
         num_cycles = floor(tmax / dt) + 1
-        state_log = Recorder("est_state")    # full ProsthesisState (incl. hip_*)
+        state_log = Recorder("est_prosthesis_state")  # full ProsthesisState (incl. hip_*)
         timing_log = Recorder("est_idle")    # LoopStats (idle margin + measured dt)
 
         completion_stage = 1
@@ -108,18 +109,14 @@ def run(dt, tmax, buffer, state_buf, start_barrier, stop_event, start_time,
 
             imu_frame = imu.read()
 
-            # pull the medulla-derived joint kinematics + GRFs off the buffer and
-            # write them into THIS process's local state, BEFORE the ESKF -- its
-            # loop closures read joint angles/velocities off the bus.
+            # adopt the full proprioceptive state off the buffer as this tick's
+            # base, BEFORE the ESKF (its loop closures read joint velocities off
+            # the bus). hip_* arrive as zero and are overlaid by eskf.update below;
+            # every other physical field (motor, spring, torques, GRF) now carries
+            # through to B2 + the log. .seq is available for staleness checks.
             ms = buffer.latest()
             if ms is not None:
-                state.knee_angle = ms.knee_angle
-                state.ankle_angle = ms.ankle_angle
-                state.knee_velocity = ms.knee_velocity
-                state.ankle_velocity = ms.ankle_velocity
-                state.toe_grf = ms.toe_grf      # for high-level contact detection
-                state.heel_grf = ms.heel_grf
-                # ms.seq / ms.t available if you want medulla-staleness checks.
+                state = ms.state
 
             # --- inline ESKF step (was ProsthesisStateEstimator._apply_eskf) ---
             # pass the estimator's OWN loop clock t (shares the IMU timebase);

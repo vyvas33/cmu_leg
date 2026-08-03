@@ -20,3 +20,11 @@ uv sync
     ssh -v cmuleg@10.42.0.1
     ```
 - You are in
+
+### Mobile Hotspot 
+Alternatively, you can also use your smartphone's hotspot to connect. 
+- To sync outputs run: 
+```bash 
+    rsync -avz cmuleg@172.20.10.4:~/cmu_leg/output/ ./output/ 
+```
+

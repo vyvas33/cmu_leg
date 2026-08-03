@@ -30,7 +30,7 @@ from cmu_leg.estimation.eskf.eskf import ESKF
 from cmu_leg.control.high_level_control import ProsthesisControl
 from cmu_leg.control.low_level_control import LowLevelControl
 from cmu_leg.types.sensors import RawEtherCATFrame, IMUFrame
-from cmu_leg.runtime.buffer import MedullaStateBuffer, StateBuffer, CommandBuffer
+from cmu_leg.runtime.buffer import StateBuffer, CommandBuffer
 
 N_WARM = 2000
 N = 30000
@@ -66,7 +66,7 @@ def main():
     eskf = ESKF()
     pc = ProsthesisControl()
     llc = LowLevelControl()
-    b1, b2, b3 = MedullaStateBuffer(), StateBuffer(), CommandBuffer()
+    b1, b2, b3 = StateBuffer(), StateBuffer(), CommandBuffer()
     imu = IMUFrame()
     state = proprio.state   # proprio writes here; eskf reads/writes the same bus
 
@@ -88,8 +88,7 @@ def main():
         llo = llc.compute(state, desired_torque=desired,
                           control_enabled=True, dt=dt);                  c.append(time.perf_counter())
         llc.to_drive_command(llo);                                       c.append(time.perf_counter())
-        b1.publish(state.knee_angle, state.ankle_angle, state.knee_velocity,
-                   state.ankle_velocity, state.toe_grf, state.heel_grf, t); c.append(time.perf_counter())
+        b1.publish(state);                                               c.append(time.perf_counter())
         b1.latest();                                                     c.append(time.perf_counter())
         b2.publish(state);                                               c.append(time.perf_counter())
         b2.latest();                                                     c.append(time.perf_counter())

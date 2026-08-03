@@ -101,7 +101,7 @@ def run(dt, tmax, state_buf, cmd_buf, start_barrier, stop_event, start_time,
             # mode decision -- high-level OWNS `standing` (the estimator's copy is
             # inert). TODO: real mode FSM / supervisor; time-based stand-in now.
             state.standing = t > WARMUP_S
-
+            state.standing = False # comment out line to send real torques.
             desired = pc.compute(state, t)              # TorqueDesired
             cmd_buf.publish(desired, state.standing)    # -> B3, down to low-level
 

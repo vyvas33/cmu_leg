@@ -88,19 +88,27 @@ def run(dt, tmax, buffer, cmd_buf, stop_event, start_time,
 
     # completion_stage gates teardown so it only touches what actually came up.
     completion_stage = 0
+    ec = None                     # bound before the guard so teardown can always see it
 
     def terminate_gracefully():
         gc.enable()  # undo the RT gc freeze unconditionally
         if completion_stage >= 1:
             for lg in (state_log, frame_log, output_log, drive_log, timing_log):
                 lg.save(run_dir)
-            # de-energize before dropping the master. Closing the master alone
-            # already fault-stops the Elmos (comms watchdog); this makes the intent
-            # explicit. TODO: once COMMAND_MOTORS is True, add a short disable-ramp
-            # (a few ec.write exchanges with enable=False) before close, like
-            # main.py's SHUTDOWN_TIME phase, so a powered stop settles cleanly.
-            ec.enable = False
-            ec.close()
+        # ALWAYS de-energize + reset the bus if the master ever came up -- even on an
+        # init-time failure (an emergency during ec.connect() raises BEFORE
+        # completion_stage=1). ec.close() drives the bus to INIT, dropping the Elmos
+        # out of OP -> de-energized and reset for the next run. The old
+        # completion_stage gate skipped this on init failure, leaving the motors
+        # humming and the next run's PDO remap throwing an emergency.
+        # TODO: once COMMAND_MOTORS is True, add a short disable-ramp (a few ec.write
+        # exchanges with enable=False) before close, like main.py's SHUTDOWN_TIME.
+        if ec is not None:
+            try:
+                ec.enable = False
+                ec.close()
+            except Exception as e:
+                print(f"{pname}: EtherCAT close failed during teardown: {e}")
         if is_verbose:
             print(f"{pname}: terminated gracefully.")
 

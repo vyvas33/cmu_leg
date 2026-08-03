@@ -41,7 +41,7 @@ from cmu_leg.runtime import low_level, estimator, high_level
 from cmu_leg.utility.utils import make_run_dir
 
 DT_LOW = 1.0 / 1000    # low-level loop period (s)
-DT_EST = 1.0 / 1000    # estimator loop period (s); drop to 1/500 after bring-up
+DT_EST = 1.0 / 500    # estimator loop period (s); drop to 1/500 after bring-up
 DT_HIGH = 1.0 / 1000   # high-level loop period (s)
 TMAX = 10.0            # experiment duration (s)
 HW_INIT_TIMEOUT = 5.0  # max wait for the low-level hardware to come up (s)

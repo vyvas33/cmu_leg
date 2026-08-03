@@ -92,6 +92,12 @@ def _panel(d: dict, out: Path, prefix: str, title: str, spec: dict,
 
 
 def _plot_state(d: dict, out: Path, prefix: str = "") -> None:
+    _panel(d, out, prefix, "Hip angle (ESKF)",
+           {"hip": (degrees, "hip_angle")},
+           "angle [deg]", "hip_angle.png")
+    _panel(d, out, prefix, "Hip velocity (ESKF)",
+           {"hip": (degrees, "hip_velocity")},
+           "velocity [deg/s]", "hip_velocity.png")
     _panel(d, out, prefix, "Knee angles",
            {"motor": (degrees, "knee_motor_angle"), "joint": (degrees, "knee_angle")},
            "angle [deg]", "knee_angles.png")

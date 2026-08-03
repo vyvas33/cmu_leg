@@ -92,7 +92,7 @@ def run(dt, tmax, buffer, cmd_buf, stop_event, start_time,
     def terminate_gracefully():
         gc.enable()  # undo the RT gc freeze unconditionally
         if completion_stage >= 1:
-            for lg in (state_log, frame_log, drive_log, timing_log):
+            for lg in (state_log, frame_log, output_log, drive_log, timing_log):
                 lg.save(run_dir)
             # de-energize before dropping the master. Closing the master alone
             # already fault-stops the Elmos (comms watchdog); this makes the intent
@@ -116,6 +116,7 @@ def run(dt, tmax, buffer, cmd_buf, stop_event, start_time,
         num_cycles = floor(tmax / dt) + 1
         state_log = Recorder("low_prosthesis_state")  # ProsthesisState each tick
         frame_log = Recorder("low_frame")     # raw EtherCAT frame each tick
+        output_log = Recorder("low_output")   # LowLevelOutput (llo) -- the control output
         drive_log = Recorder("low_drive")     # DriveCommand the loop WOULD send
         timing_log = Recorder("low_idle")     # LoopStats (idle margin + measured dt)
 
@@ -239,6 +240,7 @@ def run(dt, tmax, buffer, cmd_buf, stop_event, start_time,
             idle = clock - perf_counter()
             state_log.append(t, state)
             frame_log.append(t, frame)
+            output_log.append(t, llo)
             drive_log.append(t, drive_cmd)
             timing_log.append(t, LoopStats(idle, dt_meas))
             sleep(idle) if idle >= 0.0 else sleep(0.0)   # <6>

@@ -229,6 +229,7 @@ def _resolve_run(arg: str) -> Path:
 # keep specifics ahead of generics if you add any).
 _PLOTTERS = [
     ("lowlevel", _plot_lowlevel),
+    ("output",   _plot_lowlevel),   # low_output = LowLevelOutput (llo): same fields
     ("state",    _plot_state),
     ("torque",   _plot_torque),
     ("drive",    _plot_drive),

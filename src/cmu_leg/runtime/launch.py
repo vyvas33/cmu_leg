@@ -113,8 +113,20 @@ def main():
                 except OSError as e:
                     print(f"MAIN: could not set affinity for {p.name}: {e}")
 
+        # --- anchor the deadline to the children's barrier-stamped origin -----
+        # The children stamp `start_time` only after all three clear the start
+        # Barrier, which trails spawn by the estimator's IMU init (~seconds). Base
+        # the liveness deadline on THAT origin, not the parent's spawn time --
+        # otherwise it fires ~(IMU-init) seconds early and cuts every child's run
+        # short (each child runs exactly tmax/dt cycles from start_time).
+        origin_timeout = perf_counter() + HW_INIT_TIMEOUT + 10.0
+        while start_time.value == 0.0 and perf_counter() < origin_timeout:
+            if stop_event.wait(timeout=0.05):
+                break
+        t0 = start_time.value or perf_counter()
+
         # --- monitor until the children finish, fault, or we're interrupted --
-        deadline = perf_counter() + TMAX + 1.0
+        deadline = t0 + TMAX + 1.0
         while any(p.is_alive() for p in procs) and perf_counter() < deadline:
             if stop_event.wait(timeout=0.5):
                 break

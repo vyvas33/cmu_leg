@@ -20,8 +20,10 @@ Startup handshake:
   1. spawn low-level; it inits EtherCAT and sets init_evnt.
   2. block on init_evnt (hardware confirmed up) -- only THEN spawn estimator +
      high-level.
-  3. all three hit Barrier(3); the first stamps the shared start_time and every
-     loop begins from that common origin (two-phase, see low_level.py).
+  3. estimator + high-level hit Barrier(2); the first stamps the shared start_time.
+     Low-level is NOT in the barrier -- it heartbeats the EtherCAT bus (holding the
+     drives in OP) and reads start_time once stamped, so all three loops still begin
+     from the common origin without letting the bus go silent.
 
 The parent does not run a realtime loop and does not log; each child logs its own
 trace into the shared run_dir. The parent monitors liveness and, on Ctrl-C /
@@ -58,7 +60,11 @@ def main():
     stop_event = Event()          # any process -> shutdown everywhere
     init_evnt = Event()           # low-level -> "EtherCAT is up"
     start_time = Value("d", 0.0)  # synced perf_counter origin (barrier-stamped)
-    start_barrier = Barrier(3)    # the three children; parent is not in it
+    # Only estimator + high-level are in the barrier. Low-level stays OUT: it must
+    # keep the EtherCAT bus alive (heartbeat) instead of blocking, or the Elmo SM
+    # watchdog drops the drives out of OP during the estimator's IMU init. It picks
+    # up the same start_time the barrier stamps.
+    start_barrier = Barrier(2)
 
     procs = []
 
@@ -77,9 +83,8 @@ def main():
         low_p = Process(
             name="LOWLEVEL", target=low_level.run,
             kwargs=dict(dt=DT_LOW, tmax=TMAX, buffer=b1, cmd_buf=b3,
-                        start_barrier=start_barrier, stop_event=stop_event,
-                        start_time=start_time, init_evnt=init_evnt,
-                        run_dir=run_dir))
+                        stop_event=stop_event, start_time=start_time,
+                        init_evnt=init_evnt, run_dir=run_dir))
         low_p.start()
         procs.append(low_p)
 

@@ -109,7 +109,7 @@ def main():
             print("WARNING: failed to reach OPERATION_ENABLED")
 
         # set standing to True 
-        run(STANDING_DURATION, standing=True)
+        run(STANDING_DURATION, standing=False)
 
     except KeyboardInterrupt:
         print("terminated early")

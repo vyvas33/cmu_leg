@@ -60,7 +60,7 @@ class LoopStats:  # <1>
     dt: float
 
 
-def run(dt, tmax, buffer, cmd_buf, start_barrier, stop_event, start_time,
+def run(dt, tmax, buffer, cmd_buf, stop_event, start_time,
         init_evnt, run_dir, is_verbose=False):
     """Low-level child process entry point (the Process target).
 
@@ -72,12 +72,12 @@ def run(dt, tmax, buffer, cmd_buf, start_barrier, stop_event, start_time,
             the full proprioceptive ProsthesisState (hip_* still zero here).
         cmd_buf (CommandBuffer): B3, high-level -> low-level. Sole reader, with a
             staleness watchdog (see <7>).
-        start_barrier (multiprocessing.Barrier): Trips once every process reaches
-            it; its action stamps the shared start_time. Time-syncs the loops.
         stop_event (multiprocessing.Event): Set by any process (or the guard) to
             request graceful shutdown everywhere.
         start_time (multiprocessing.Value): Shared 'd'; the synced perf_counter
-            origin. Read AFTER start_barrier.wait().
+            origin, STAMPED by the estimator+high-level barrier. Low-level is not
+            in that barrier -- it heartbeats the EtherCAT bus and reads this once
+            it becomes nonzero (see the start-sync note below).
         init_evnt (multiprocessing.Event): Set once hardware is up, so the parent
             gates the estimator spawn on it (hgeyer's init_evnt). <2>
         run_dir (str | Path): Log directory, created ONCE by the parent so all
@@ -127,11 +127,17 @@ def run(dt, tmax, buffer, cmd_buf, start_barrier, stop_event, start_time,
         gc.freeze()
         gc.disable()
 
-        # --- sync start (Barrier(3): low-level, estimator, high-level) -------
-        if start_barrier.wait() == 0:                 # <4>
-            with start_time.get_lock():
-                start_time.value = perf_counter()
-        start_barrier.wait()
+        # --- start sync: HEARTBEAT, do not block on a barrier ----------------
+        # Low-level is deliberately NOT in the start Barrier. Blocking here would
+        # leave the EtherCAT bus silent while the estimator inits its IMUs (~4 s),
+        # and the Elmo sync-manager watchdog would drop the drives out of OP (they
+        # then ignore the output PDO -> stuck in SWITCH_ON_DISABLED). Instead we
+        # keep exchanging to hold OP, and pick up the shared origin the estimator+
+        # high-level barrier stamps into start_time. Same t0, warm bus.
+        while start_time.value == 0.0 and not stop_event.is_set():
+            ec.read()   # heartbeat: one PDO exchange -> feeds the drive watchdog
+        if stop_event.is_set():
+            return
         t0 = start_time.value
 
         # --- soft-realtime loop (integer cycle count, like devcom) -----------

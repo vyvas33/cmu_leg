@@ -26,6 +26,7 @@ from time import perf_counter, sleep
 from multiprocessing import current_process
 
 from cmu_leg.hardware.ethercat_io import EtherCATInterface
+from cmu_leg.hardware.elmos.state_machine import drive_state
 from cmu_leg.estimation.proprioceptive_estimator import ProprioceptiveEstimator
 from cmu_leg.control.low_level_control import LowLevelControl
 from cmu_leg.types.commands import TorqueDesired, DriveCommand
@@ -46,6 +47,9 @@ COMMAND_MOTORS = False  # BRING-UP GATE: False = enable the drives but always se
 # Tune to the torque you expect this session.
 KNEE_TORQUE_TRIP = 30.0    # [Nm]
 ANKLE_TORQUE_TRIP = 30.0   # [Nm]
+
+ENABLE_GRACE_S = 2.0  # after ec.enable rises, warn if the drives haven't reached
+                      # OPERATION_ENABLED within this long (motor power off / STO / fault)
 
 
 @dataclass
@@ -136,6 +140,9 @@ def run(dt, tmax, buffer, cmd_buf, start_barrier, stop_event, start_time,
         last_cmd_seq = 0          # B3 watchdog state
         stale_ticks = 0
         cycle = 0
+        reached_enabled = False   # drives confirmed OPERATION_ENABLED at least once
+        enable_since = None       # t when ec.enable first went True
+        warned_enable = False     # one-shot "never reached enabled" warning
         # Seed the input frame with one read so the first ec.write derives its
         # control word from a real status word (write, then read-back, per tick).
         frame = ec.read()
@@ -199,6 +206,24 @@ def run(dt, tmax, buffer, cmd_buf, start_barrier, stop_event, start_time,
             # write so this tick's control word reflects it.
             ec.enable = t >= WARMUP_S
             frame = ec.write(drive_cmd)   # one PDO exchange/tick; returns fresh inputs
+
+            # --- drive-enable feedback (parity with main.py's reached_enabled) ---
+            # Report the first time the drives reach OPERATION_ENABLED, and warn
+            # once if they never do within ENABLE_GRACE_S of commanding enable --
+            # showing the CiA-402 state each drive is stuck in (motor power / STO).
+            if ec.enable and enable_since is None:
+                enable_since = t
+            if not reached_enabled and ec.control_enabled():
+                reached_enabled = True
+                print(f"[{t:6.3f}s] drives OPERATION_ENABLED")
+            elif (enable_since is not None and not reached_enabled and not warned_enable
+                  and t - enable_since > ENABLE_GRACE_S):
+                warned_enable = True
+                knee_st = drive_state(frame.knee_status_word).name
+                ankle_st = drive_state(frame.ankle_status_word).name
+                print(f"[{t:6.3f}s] WARNING: drives did NOT reach OPERATION_ENABLED "
+                      f"{ENABLE_GRACE_S:.0f}s after enable (knee={knee_st}, ankle={ankle_st}). "
+                      f"Check motor power / STO / faults.")
 
             if stop_event.is_set():
                 return   # guard ensures graceful termination

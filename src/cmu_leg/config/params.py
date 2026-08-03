@@ -285,8 +285,8 @@ IMU = IMUParams(
     thigh_port="/dev/ttyUSB1",   # update from discover_imu_ports()
     foot_port="/dev/ttyUSB0",
     baud=921600,
-    stream_rate_hz=200,        # tune later; 0.4*200=80 -> lpf 42 is the largest valid
-    lpf_cutoff_hz=42,
+    stream_rate_hz=1000,        # tune later; 0.4*200=80 -> lpf 42 is the largest valid
+    lpf_cutoff_hz=256,
     acc_range_g=16,
     gyro_range_dps=2000,
 )

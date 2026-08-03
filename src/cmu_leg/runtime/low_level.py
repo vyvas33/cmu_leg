@@ -36,7 +36,9 @@ from cmu_leg.utility.recorder import Recorder
 
 MAX_STALE_TICKS = 5   # B3 watchdog: no fresh command for this many ticks -> safe zero
 WARMUP_S = 5.0        # settle time before energizing the drives (ec.enable rises at t >= this)
-COMMAND_MOTORS = False  # BRING-UP GATE: False = enable the drives but always send ZERO torque
+SHUTDOWN_S = 1.0      # disable-ramp on teardown: exchange zero cmds w/ enable=False this long,
+                      # walking the drives to SWITCH_ON_DISABLED before close (mirrors main.py)
+COMMAND_MOTORS = True  # BRING-UP GATE: False = enable the drives but always send ZERO torque
                         # (validate the enable/write FSM path). True = send the real drive command.
 
 # Torque trip guard: if the controller commands more motor torque ff [Nm] than this
@@ -45,8 +47,8 @@ COMMAND_MOTORS = False  # BRING-UP GATE: False = enable the drives but always se
 # catches a runaway before the ceiling. 
 # 
 # Tune to the torque you expect this session.
-KNEE_TORQUE_TRIP = 30.0    # [Nm]
-ANKLE_TORQUE_TRIP = 30.0   # [Nm]
+KNEE_TORQUE_TRIP = 50.0    # [Nm]
+ANKLE_TORQUE_TRIP = 50.0   # [Nm]
 
 ENABLE_GRACE_S = 2.0  # after ec.enable rises, warn if the drives haven't reached
                       # OPERATION_ENABLED within this long (motor power off / STO / fault)
@@ -97,18 +99,29 @@ def run(dt, tmax, buffer, cmd_buf, stop_event, start_time,
                 lg.save(run_dir)
         # ALWAYS de-energize + reset the bus if the master ever came up -- even on an
         # init-time failure (an emergency during ec.connect() raises BEFORE
-        # completion_stage=1). ec.close() drives the bus to INIT, dropping the Elmos
-        # out of OP -> de-energized and reset for the next run. The old
-        # completion_stage gate skipped this on init failure, leaving the motors
-        # humming and the next run's PDO remap throwing an emergency.
-        # TODO: once COMMAND_MOTORS is True, add a short disable-ramp (a few ec.write
-        # exchanges with enable=False) before close, like main.py's SHUTDOWN_TIME.
+        # completion_stage=1). Two layers:
+        #  1. If the loop actually ran (completion_stage>=1, so the bus reached OP),
+        #     run a disable-ramp: keep exchanging ZERO commands with enable=False so
+        #     the Elmos walk the CiA-402 FSM down to SWITCH_ON_DISABLED (torque off,
+        #     clean stop) rather than being cut mid-torque. Mirrors main.py's
+        #     SHUTDOWN_TIME phase.
+        #  2. ALWAYS ec.close() (in finally): drives the bus to INIT -> de-energized
+        #     and reset for the next run. This is the backstop even if the ramp is
+        #     skipped (init failure) or fails. The old completion_stage gate skipped
+        #     close entirely on init failure, which left the motors humming.
         if ec is not None:
             try:
                 ec.enable = False
-                ec.close()
+                if completion_stage >= 1:
+                    for _ in range(int(SHUTDOWN_S / dt)):
+                        ec.write(DriveCommand())
             except Exception as e:
-                print(f"{pname}: EtherCAT close failed during teardown: {e}")
+                print(f"{pname}: disable-ramp failed during teardown: {e}")
+            finally:
+                try:
+                    ec.close()
+                except Exception as e:
+                    print(f"{pname}: EtherCAT close failed during teardown: {e}")
         if is_verbose:
             print(f"{pname}: terminated gracefully.")
 

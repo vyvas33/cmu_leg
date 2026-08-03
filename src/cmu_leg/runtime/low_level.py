@@ -1,13 +1,17 @@
 """
 Low-level process body. Runs as a child process.
 
-Owns the EtherCAT master and the ProprioceptiveEstimator. Each tick: reads one
-EtherCAT frame -> proprioceptive physical state -> publishes the medulla subset
-to the estimator (B1); reads the high-level command (B3) through a staleness
-watchdog and computes the low-level drive command via LowLevelControl.
+Owns the EtherCAT master and the ProprioceptiveEstimator. Each tick: derives the
+proprioceptive physical state from the last EtherCAT frame -> publishes the full
+state to the estimator (B1); reads the high-level command (B3) through a staleness
+watchdog, computes the low-level drive command via LowLevelControl, and writes it
+back with `ec.write` (one PDO exchange per tick, which also reads the next frame).
 
-Actuation (`ec.write`) is DEFERRED for safety: the drive command is computed and
-logged, but not yet written to the motors -- see the TODO(bench) in the loop.
+BRING-UP SAFETY: `COMMAND_MOTORS` gates whether real torque is sent. With it False
+(the default), the drives are still ENERGIZED after WARMUP_S (ec.enable rises,
+CiA-402 FSM walks to OPERATION_ENABLED) but the commanded torque is forced to zero
+-- this validates the enable/write path with no motion. Flip it True only when the
+leg is on a stand and you intend to command torque.
 
 Structured after hgeyer's hardware/devcom.py run(): a run() entry point spawned
 as the Process target, hardware initialized AFTER spawn (pysoem master can't be
@@ -30,6 +34,18 @@ from cmu_leg.runtime.guard import ExIntGuard
 from cmu_leg.utility.recorder import Recorder
 
 MAX_STALE_TICKS = 5   # B3 watchdog: no fresh command for this many ticks -> safe zero
+WARMUP_S = 5.0        # settle time before energizing the drives (ec.enable rises at t >= this)
+COMMAND_MOTORS = False  # BRING-UP GATE: False = enable the drives but always send ZERO torque
+                        # (validate the enable/write FSM path). True = send the real drive command.
+
+# Torque trip guard: if the controller commands more motor torque ff [Nm] than this
+# on either joint -> de-energize and stop the whole run. Set
+# below the controller's own saturation (torque_max = 100 knee / 150 ankle) so it
+# catches a runaway before the ceiling. 
+# 
+# Tune to the torque you expect this session.
+KNEE_TORQUE_TRIP = 30.0    # [Nm]
+ANKLE_TORQUE_TRIP = 30.0   # [Nm]
 
 
 @dataclass
@@ -74,6 +90,12 @@ def run(dt, tmax, buffer, cmd_buf, start_barrier, stop_event, start_time,
         if completion_stage >= 1:
             for lg in (state_log, frame_log, drive_log, timing_log):
                 lg.save(run_dir)
+            # de-energize before dropping the master. Closing the master alone
+            # already fault-stops the Elmos (comms watchdog); this makes the intent
+            # explicit. TODO: once COMMAND_MOTORS is True, add a short disable-ramp
+            # (a few ec.write exchanges with enable=False) before close, like
+            # main.py's SHUTDOWN_TIME phase, so a powered stop settles cleanly.
+            ec.enable = False
             ec.close()
         if is_verbose:
             print(f"{pname}: terminated gracefully.")
@@ -114,6 +136,9 @@ def run(dt, tmax, buffer, cmd_buf, start_barrier, stop_event, start_time,
         last_cmd_seq = 0          # B3 watchdog state
         stale_ticks = 0
         cycle = 0
+        # Seed the input frame with one read so the first ec.write derives its
+        # control word from a real status word (write, then read-back, per tick).
+        frame = ec.read()
         while cycle < num_cycles:  # <5>
             now = perf_counter()
             t = now - t0          # published stamp, relative to synced start
@@ -123,7 +148,8 @@ def run(dt, tmax, buffer, cmd_buf, start_barrier, stop_event, start_time,
             dt_meas = now - t_prev
             t_prev = now
 
-            frame = ec.read()
+            # state is derived from the frame read back by the PREVIOUS exchange
+            # (one-cycle sense->act latency, same as main.py's read-once pattern).
             state = proprio.update(frame, dt_meas)
 
             # publish the full proprioceptive state to the estimator (B1). hip_*
@@ -148,15 +174,31 @@ def run(dt, tmax, buffer, cmd_buf, start_barrier, stop_event, start_time,
 
             llo = llc.compute(state, desired_torque=desired,
                               control_enabled=ec.control_enabled(), dt=dt_meas)
-            # nonzero command only when standing on a FRESH command; else zeros
+            # Real command only when COMMAND_MOTORS is set AND standing on a FRESH
+            # command; else zeros. COMMAND_MOTORS=False forces zeros for the enable-
+            # validation run. (The standing gate is a stopgap -- real stance/swing
+            # control should command torque regardless of standing.)
             drive_cmd = (llc.to_drive_command(llo)
-                         if (fresh and state.standing) else DriveCommand())
+                         if (COMMAND_MOTORS and fresh and state.standing) else DriveCommand())
 
-            # TODO(bench): actuation deferred for safety. To drive the motors,
-            # switch to the main.py exchange pattern -- read ONCE before the loop
-            # and `frame = ec.write(drive_cmd)` here (one PDO exchange per tick) --
-            # and manage ec.enable. Until then we stay read-only and just log the
-            # command the loop WOULD send.
+            # Torque trip guard: gate on the controller's COMMANDED motor torque ff
+            # (deterministic, watches what the controller WOULD drive even while
+            # COMMAND_MOTORS forces zeros). An over-limit command means something is
+            # wrong -> command zero + disable this tick, then stop the whole run.
+            if (abs(llo.knee_motor_torque_ff) > KNEE_TORQUE_TRIP
+                    or abs(llo.ankle_motor_torque_ff) > ANKLE_TORQUE_TRIP):
+                print(f"[TORQUE TRIP] knee={llo.knee_motor_torque_ff:.2f} "
+                      f"ankle={llo.ankle_motor_torque_ff:.2f} Nm -> de-energizing")
+                ec.enable = False
+                ec.write(DriveCommand())   # zero command + disable this tick
+                stop_event.set()           # propagate the stop to estimator + high-level
+                return                     # ExIntGuard runs teardown (saves logs, ec.close)
+
+            # Energize after the warmup: ec.write drives the CiA-402 FSM toward
+            # OPERATION_ENABLED whenever ec.enable is True. Set enable BEFORE the
+            # write so this tick's control word reflects it.
+            ec.enable = t >= WARMUP_S
+            frame = ec.write(drive_cmd)   # one PDO exchange/tick; returns fresh inputs
 
             if stop_event.is_set():
                 return   # guard ensures graceful termination

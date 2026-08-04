@@ -105,10 +105,6 @@ def _dump_config(run_dir):
         json.dump(cfg, f, indent=2, default=str)
     rt, g = params.RUNTIME, cfg["git"]
     tag = (str(g["commit"])[:10] + (" (dirty)" if g["dirty"] else "")) if g["commit"] else "no-git"
-    print(f"MAIN: config -> {os.path.join(run_dir, 'config.json')}  [{tag}]")
-    print(f"      low_warmup={rt.low_warmup_s}s control_warmup={rt.control_warmup_s}s "
-          f"command_motors={rt.command_motors} kd={params.STANDING.kd} "
-          f"trips=({rt.knee_torque_trip},{rt.ankle_torque_trip})Nm tmax={rt.tmax}s")
 
 
 def main():

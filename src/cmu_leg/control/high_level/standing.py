@@ -20,15 +20,18 @@ class StandingController(TorqueController):
         self._kp = standing.kp
         self._kd = standing.kd
 
-        # low pass filters 
+        # Low-pass filters. These are FIXED-coefficient biquads, so they must be
+        # designed at the rate they are actually ticked -- the control-process rate
+        # (standing runs there), NOT the low-level sample_rate. Designing at the
+        # wrong rate silently halves the effective cutoff.
         self._knee_vel_lowpass = Lowpass(
             cutoff_freq=standing.knee_vel_lowpass_cutoff,
-            sample_rate=common.sample_rate,
+            sample_rate=common.control_sample_rate,
             order=standing.vel_lowpass_order,
         )
         self._ankle_vel_lowpass = Lowpass(
             cutoff_freq=standing.ankle_vel_lowpass_cutoff,
-            sample_rate=common.sample_rate,
+            sample_rate=common.control_sample_rate,
             order=standing.vel_lowpass_order,
         )
 

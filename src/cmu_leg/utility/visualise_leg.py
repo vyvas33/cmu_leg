@@ -7,7 +7,7 @@ Usage:
     uv run python -m cmu_leg.utility.visualise_leg --list        # list runs
 
 Works on both single-process and multiprocess runs: the state trace is taken
-from whichever of `est_prosthesis_state` (authoritative, ESKF hip), `state`
+from whichever of `control_prosthesis_state` (authoritative, ESKF hip), `state`
 (single-process), or `low_prosthesis_state` is present, in that order.
 
 Writes leg.gif into the run directory. The hip is pinned at the origin, so this
@@ -28,17 +28,17 @@ from cmu_leg.utility.plot_run import _read_csv, _resolve_run, _list_runs, _lates
 
 
 def _find_state_csv(run_dir):
-    """Pick the best `*state.csv` in the run. Preference: the estimator's
-    authoritative ESKF state (`est_*`), then a single-process `state.csv`, then
-    the low-level's local copy (`low_*`). Matches by suffix so it works on both
-    the new `*_prosthesis_state` names and older `est_state`/`low_state` runs."""
+    """Pick the best `*state.csv` in the run. Preference: the control process's
+    authoritative ESKF state (`control_*`, or `est_*` on older runs), then a
+    single-process `state.csv`, then the low-level's local copy (`low_*`). Matches
+    by suffix so it works on both the `*_prosthesis_state` names and older runs."""
     cands = sorted(run_dir.glob("*state.csv"))
     if not cands:
         raise SystemExit(f"No `*state.csv` found in {run_dir.name}.")
 
     def rank(p) -> int:
         s = p.stem
-        if s.startswith("est"):
+        if s.startswith("control") or s.startswith("est"):  # est* = older runs
             return 0
         if s == "state":
             return 1

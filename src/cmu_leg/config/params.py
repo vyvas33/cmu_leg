@@ -11,8 +11,15 @@ from math import pi
 # Common / shared
 @dataclass(frozen=True, slots=True)
 class CommonParams:
-    sample_rate: float = 1000.0              # Hz
+    sample_rate: float = 1000.0              # Hz, low-level loop rate
     sample_time: float = 0.001               # s
+
+    # Control-process loop rate (ESKF + high-level, merged). Lower than the
+    # low-level rate because the ESKF + controller can't hold 1 kHz on the Jetson.
+    # Any FIXED-coefficient filter that ticks in the control process (e.g. the
+    # standing velocity lowpasses) must be designed at THIS rate, not sample_rate,
+    # or its effective cutoff is wrong. launch.py derives DT_CONTROL from it.
+    control_sample_rate: float = 500.0       # Hz, control-process loop rate
 
     # Measured-dt clamp, applied wherever a real elapsed dt is divided by.
     # The loop schedules 1 kHz but does not always make it: logged standing runs

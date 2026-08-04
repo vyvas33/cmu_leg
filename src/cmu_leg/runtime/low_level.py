@@ -35,7 +35,7 @@ from cmu_leg.runtime.guard import ExIntGuard
 from cmu_leg.utility.recorder import Recorder
 
 MAX_STALE_TICKS = 5   # B3 watchdog: no fresh command for this many ticks -> safe zero
-WARMUP_S = 5.0        # settle time before energizing the drives (ec.enable rises at t >= this)
+WARMUP_S = 7.0        # settle time before energizing the drives (ec.enable rises at t >= this)
 SHUTDOWN_S = 1.0      # disable-ramp on teardown: exchange zero cmds w/ enable=False this long,
                       # walking the drives to SWITCH_ON_DISABLED before close (mirrors main.py)
 COMMAND_MOTORS = True  # BRING-UP GATE: False = enable the drives but always send ZERO torque

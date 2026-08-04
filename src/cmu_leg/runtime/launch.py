@@ -51,7 +51,7 @@ import cmu_leg.config.params as params
 # from what those filters were designed at.
 DT_LOW = 1.0 / params.COMMON.sample_rate          # low-level loop period (s)
 DT_CONTROL = 1.0 / params.COMMON.control_sample_rate  # control (ESKF + high-level) loop period (s)
-TMAX = 10.0              # experiment duration (s)
+TMAX = 20.0              # experiment duration (s)
 HW_INIT_TIMEOUT = 5.0    # max wait for the low-level hardware to come up (s)
 CORES = (2, 3)           # CPU affinity for (low-level, control); Linux only
 

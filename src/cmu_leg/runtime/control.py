@@ -38,7 +38,7 @@ from cmu_leg.runtime.buffer import StateBuffer, CommandBuffer
 from cmu_leg.runtime.guard import ExIntGuard
 from cmu_leg.utility.recorder import Recorder
 
-WARMUP_S = 5.0   # TODO: replace with the real mode FSM / supervisor
+WARMUP_S = 10.0   # TODO: replace with the real mode FSM / supervisor
 
 
 @dataclass

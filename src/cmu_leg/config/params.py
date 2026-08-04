@@ -1,8 +1,6 @@
 """Controller parameters, ported from baseline_controller/params.m and its .mat
 files (sys_id_*, ankle_stiffness_params, spring_zero_positions, encoder_counts_
 to_rad_polys, ankle_angle_offset, dynamic_params).
-
-Needs cleanup
 """
 from dataclasses import dataclass
 from math import pi
@@ -14,26 +12,20 @@ class CommonParams:
     sample_rate: float = 1000.0              # Hz, low-level loop rate
     sample_time: float = 0.001               # s
 
-    # Control-process loop rate (ESKF + high-level, merged). Lower than the
-    # low-level rate because the ESKF + controller can't hold 1 kHz on the Jetson.
-    # Any FIXED-coefficient filter that ticks in the control process (e.g. the
-    # standing velocity lowpasses) must be designed at THIS rate, not sample_rate,
-    # or its effective cutoff is wrong. launch.py derives DT_CONTROL from it.
+    # Control-process loop rate (merged ESKF + high-level; can't hold 1 kHz on the
+    # Jetson). Fixed-coefficient filters ticking in that process (standing velocity
+    # lowpasses) MUST be designed at this rate, not sample_rate, or their effective
+    # cutoff is wrong. launch.py derives DT_CONTROL from it.
     control_sample_rate: float = 500.0       # Hz, control-process loop rate
 
-    # Measured-dt clamp, applied wherever a real elapsed dt is divided by.
-    # The loop schedules 1 kHz but does not always make it: logged standing runs
-    # sit at 1.000 ms median / 1.02 ms p99, with a ~21 ms outlier once per 15 s
-    # run and ~0.7% of ticks under 0.5 ms (the catch-up burst after an overrun).
-    # dt_max keeps the 21 ms tick from being integrated as one step; dt_min
-    # bounds quantization-noise gain on the differentiators -- velocity noise
-    # goes as 1/dt, and a 17-bit encoder count (4.8e-5 rad) over 0.19 ms is
-    # already 0.25 rad/s of pure noise.
+    # Measured-dt clamp for every differentiator/integrator. dt_max stops a
+    # scheduler-stall tick (~21 ms observed) integrating as one step; dt_min bounds
+    # 1/dt quantization-noise gain on the velocity derivatives.
     dt_min: float = 0.0005                   # s
     dt_max: float = 0.005                    # s
 
-    # ticks after control_enabled rises during which the pipeline runs but drives
-    # are muted to zero (filters settle); Simulink LLC "1 s Delay" = 1000 @ 1 kHz
+    # post-enable ticks the pipeline runs muted (filters settle); baseline LLC
+    # "1 s Delay" = 1000 @ 1 kHz
     startup_mute_ticks: int = 1000
 
     gravity: float = 9.81                    # m/s^2
@@ -46,6 +38,33 @@ class CommonParams:
     # default torque-conditioning lowpass; unused until those blocks take params
     lowpass_cutoff: float = 25.0             # Hz
     lowpass_order: int = 2
+
+
+# Multiprocess runtime (runtime/launch.py + low_level.py + control.py). Loop
+# periods derive from the rates in CommonParams (DT = 1/rate); these are the
+# orchestration + safety knobs that used to live scattered across those files.
+@dataclass(frozen=True, slots=True)
+class RuntimeParams:
+    tmax: float = 20.0                  # experiment duration [s]
+    hw_init_timeout: float = 5.0        # max wait for low-level EtherCAT init [s]
+    cores: tuple[int, int] = (2, 3)     # CPU affinity (low-level, control); Linux only
+
+    # Two warmups on independent clocks. low_warmup_s energizes the drives
+    # (ec.enable); control_warmup_s starts standing (reset -> min-jerk clock).
+    # Torque only becomes deliverable ~actuation_warmup_margin_s after low_warmup_s
+    # (CiA-402 enable walk + startup mute), so control_warmup_s MUST exceed
+    # low_warmup_s + margin -- else the min-jerk ramps into a dead drive and the
+    # leg snaps to setpoint instead of gliding. launch.py asserts this.
+    low_warmup_s: float = 7.0
+    control_warmup_s: float = 10.0
+    actuation_warmup_margin_s: float = 2.25
+
+    command_motors: bool = True         # False = energize but send ZERO torque (FSM-only bring-up)
+    knee_torque_trip: float = 50.0      # de-energize + stop if |knee motor torque ff| exceeds [Nm]
+    ankle_torque_trip: float = 50.0     # same, ankle [Nm]
+    enable_grace_s: float = 2.0         # warn if not OPERATION_ENABLED this long after enable [s]
+    shutdown_s: float = 1.0             # disable-ramp duration on teardown [s]
+    max_stale_ticks: int = 5            # B3 watchdog: stale command -> safe zero
 
 
 # Knee
@@ -219,6 +238,7 @@ class ImpedanceParams:
 
 # Default instances (loaded once at import). Inject alternates in tests.
 COMMON = CommonParams()
+RUNTIME = RuntimeParams()
 
 KNEE = KneeParams(
     torque_constant=0.065,
@@ -372,13 +392,9 @@ DYNPARS: tuple[float, ...] = (
 @dataclass(frozen=True, slots=True)
 class ESKFConfig:
     dt: float                    # nominal filter tick [s]; fallback when dt is not measurable
-    # measured-dt clamp, as multiples of the nominal dt. The filter integrates
-    # the caller's clock delta (t - t_prev), so loop jitter is absorbed; the
-    # clamp keeps a scheduler stall or a clock glitch from injecting a huge step.
-    # DEAD as of the measured-dt refactor: the ESKF no longer derives its own
-    # dt, the caller passes one already clamped to COMMON.dt_min/dt_max. Kept
-    # only so the ESKFConfig literal below still constructs; delete both once
-    # nothing references them.
+    # DEAD: the caller now passes a dt already clamped to COMMON.dt_min/dt_max, so
+    # the ESKF no longer clamps. Kept only so the literal below still constructs;
+    # delete both once nothing references them.
     dt_min_factor: float
     dt_max_factor: float
     # an IMU sample older than this (host clock, same timebase as t) means the

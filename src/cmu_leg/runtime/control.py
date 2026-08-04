@@ -37,8 +37,10 @@ from cmu_leg.types.state import ProsthesisState
 from cmu_leg.runtime.buffer import StateBuffer, CommandBuffer
 from cmu_leg.runtime.guard import ExIntGuard
 from cmu_leg.utility.recorder import Recorder
+import cmu_leg.config.params as params
 
-WARMUP_S = 10.0   # TODO: replace with the real mode FSM / supervisor
+# The standing schedule starts at params.RUNTIME.control_warmup_s (bound to `rt`
+# in run()). TODO: replace the time schedule with the real mode FSM / supervisor.
 
 
 @dataclass
@@ -73,6 +75,7 @@ def run(dt, tmax, buffer, cmd_buf, stop_event, start_time,
     No init_evnt here: nothing downstream is gated on control coming up.
     """
     pname = current_process().name
+    rt = params.RUNTIME           # runtime knobs (control_warmup_s here)
 
     completion_stage = 0
 
@@ -146,7 +149,7 @@ def run(dt, tmax, buffer, cmd_buf, stop_event, start_time,
             # --- mode decision + high-level policy (co-located, no extra hop) --
             # control OWNS `standing` (the low-level copy is inert on B1). TODO:
             # real mode FSM / supervisor; time-based stand-in now.
-            state.standing = t > WARMUP_S
+            state.standing = t > rt.control_warmup_s
             # state.standing = False  # comment out line to send real torques.
             desired = pc.compute(state, t)              # TorqueDesired
             cmd_buf.publish(desired, state.standing)    # -> B3, down to low-level

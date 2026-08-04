@@ -35,6 +35,9 @@ Run:  uv run python -m cmu_leg.runtime.launch
 """
 
 import os
+import json
+import subprocess
+from dataclasses import asdict
 from multiprocessing import (Process, Event, Value,
                              set_start_method, freeze_support)
 from time import perf_counter
@@ -48,16 +51,71 @@ import cmu_leg.config.params as params
 # Loop periods derive from the config rates -- single source of truth. The
 # control rate in particular is shared with the fixed-coefficient filters that
 # tick in the control process (standing velocity lowpasses), so it must not drift
-# from what those filters were designed at.
-DT_LOW = 1.0 / params.COMMON.sample_rate          # low-level loop period (s)
-DT_CONTROL = 1.0 / params.COMMON.control_sample_rate  # control (ESKF + high-level) loop period (s)
-TMAX = 20.0              # experiment duration (s)
-HW_INIT_TIMEOUT = 5.0    # max wait for the low-level hardware to come up (s)
-CORES = (2, 3)           # CPU affinity for (low-level, control); Linux only
+# from what those filters were designed at. Everything else (tmax, timeouts,
+# cores, warmups, safety gates) is in params.RUNTIME.
+DT_LOW = 1.0 / params.COMMON.sample_rate              # low-level loop period (s)
+DT_CONTROL = 1.0 / params.COMMON.control_sample_rate  # control loop period (s)
+
+
+def _check_warmups(rt):
+    """Fail fast if the standing min-jerk would start before torque can flow.
+
+    control_warmup_s (min-jerk start) must clear low_warmup_s (drive enable) plus
+    the enable-walk + startup-mute lag, or the ramp elapses into a dead drive and
+    the leg snaps to setpoint. This is the exact bug that produced the 11 Hz
+    'oscillation'; the assertion makes it un-shippable rather than silent.
+    """
+    live = rt.low_warmup_s + rt.actuation_warmup_margin_s
+    if rt.control_warmup_s < live:
+        raise SystemExit(
+            f"MAIN: RuntimeParams warmup desync -- control_warmup_s "
+            f"({rt.control_warmup_s}s) must be >= low_warmup_s + "
+            f"actuation_warmup_margin_s ({rt.low_warmup_s} + "
+            f"{rt.actuation_warmup_margin_s} = {live}s). The standing min-jerk "
+            f"would start before torque is deliverable and the leg would snap "
+            f"instead of ramping. Raise control_warmup_s in params.RUNTIME.")
+
+
+def _git_info():
+    """Best-effort {commit, dirty} so a run's log pins the exact code. None on any
+    failure (not a repo / git missing) -- never blocks a run."""
+    root = os.path.dirname(os.path.abspath(__file__))
+    try:
+        commit = subprocess.check_output(
+            ["git", "-C", root, "rev-parse", "HEAD"],
+            text=True, stderr=subprocess.DEVNULL).strip()
+        dirty = bool(subprocess.check_output(
+            ["git", "-C", root, "status", "--porcelain"],
+            text=True, stderr=subprocess.DEVNULL).strip())
+        return {"commit": commit, "dirty": dirty}
+    except Exception:
+        return {"commit": None, "dirty": None}
+
+
+def _dump_config(run_dir):
+    """Write config.json (git + the params this run used) into run_dir and echo a
+    one-line summary, so every run is self-documenting -- no hand notes needed."""
+    cfg = {
+        "git": _git_info(),
+        "runtime": asdict(params.RUNTIME),
+        "common": asdict(params.COMMON),
+        "standing": asdict(params.STANDING),
+    }
+    with open(os.path.join(run_dir, "config.json"), "w") as f:
+        json.dump(cfg, f, indent=2, default=str)
+    rt, g = params.RUNTIME, cfg["git"]
+    tag = (str(g["commit"])[:10] + (" (dirty)" if g["dirty"] else "")) if g["commit"] else "no-git"
+    print(f"MAIN: config -> {os.path.join(run_dir, 'config.json')}  [{tag}]")
+    print(f"      low_warmup={rt.low_warmup_s}s control_warmup={rt.control_warmup_s}s "
+          f"command_motors={rt.command_motors} kd={params.STANDING.kd} "
+          f"trips=({rt.knee_torque_trip},{rt.ankle_torque_trip})Nm tmax={rt.tmax}s")
 
 
 def main():
+    rt = params.RUNTIME
+    _check_warmups(rt)
     run_dir = make_run_dir("multiprocess")
+    _dump_config(run_dir)
 
     # --- shared IPC objects (built in the parent, passed to the children) ----
     b1 = StateBuffer()            # low-level -> control (full physical state)
@@ -86,13 +144,13 @@ def main():
         # --- spawn low-level, then wait for its hardware to come up ----------
         low_p = Process(
             name="LOWLEVEL", target=low_level.run,
-            kwargs=dict(dt=DT_LOW, tmax=TMAX, buffer=b1, cmd_buf=b3,
+            kwargs=dict(dt=DT_LOW, tmax=rt.tmax, buffer=b1, cmd_buf=b3,
                         stop_event=stop_event, start_time=start_time,
                         init_evnt=init_evnt, run_dir=run_dir))
         low_p.start()
         procs.append(low_p)
 
-        if not init_evnt.wait(timeout=HW_INIT_TIMEOUT):
+        if not init_evnt.wait(timeout=rt.hw_init_timeout):
             print("MAIN: low-level hardware init failed/timed out. Shutting down.")
             terminate()
             return
@@ -100,7 +158,7 @@ def main():
         # --- hardware confirmed up: spawn control (ESKF + high-level) --------
         ctrl_p = Process(
             name="CONTROL", target=control.run,
-            kwargs=dict(dt=DT_CONTROL, tmax=TMAX, buffer=b1, cmd_buf=b3,
+            kwargs=dict(dt=DT_CONTROL, tmax=rt.tmax, buffer=b1, cmd_buf=b3,
                         stop_event=stop_event, start_time=start_time,
                         run_dir=run_dir))
         ctrl_p.start()
@@ -108,7 +166,7 @@ def main():
 
         # --- pin to cores (Linux; no-op on macOS) ----------------------------
         if hasattr(os, "sched_setaffinity"):
-            for p, core in zip(procs, CORES):
+            for p, core in zip(procs, rt.cores):
                 try:
                     os.sched_setaffinity(p.pid, {core})
                 except OSError as e:
@@ -119,14 +177,14 @@ def main():
         # trails spawn. Base the liveness deadline on THAT origin, not the parent's
         # spawn time -- otherwise it fires ~(IMU-init) seconds early and cuts the
         # run short (each child runs exactly tmax/dt cycles from start_time).
-        origin_timeout = perf_counter() + HW_INIT_TIMEOUT + 10.0
+        origin_timeout = perf_counter() + rt.hw_init_timeout + 10.0
         while start_time.value == 0.0 and perf_counter() < origin_timeout:
             if stop_event.wait(timeout=0.05):
                 break
         t0 = start_time.value or perf_counter()
 
         # --- monitor until the children finish, fault, or we're interrupted --
-        deadline = t0 + TMAX + 1.0
+        deadline = t0 + rt.tmax + 1.0
         while any(p.is_alive() for p in procs) and perf_counter() < deadline:
             if stop_event.wait(timeout=0.5):
                 break

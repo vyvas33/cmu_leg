@@ -7,11 +7,12 @@ state to the estimator (B1); reads the high-level command (B3) through a stalene
 watchdog, computes the low-level drive command via LowLevelControl, and writes it
 back with `ec.write` (one PDO exchange per tick, which also reads the next frame).
 
-BRING-UP SAFETY: `COMMAND_MOTORS` gates whether real torque is sent. With it False
-(the default), the drives are still ENERGIZED after WARMUP_S (ec.enable rises,
+BRING-UP SAFETY: `params.RUNTIME.command_motors` gates whether real torque is sent.
+With it False, the drives are still ENERGIZED after `low_warmup_s` (ec.enable rises,
 CiA-402 FSM walks to OPERATION_ENABLED) but the commanded torque is forced to zero
--- this validates the enable/write path with no motion. Flip it True only when the
-leg is on a stand and you intend to command torque.
+-- this validates the enable/write path with no motion. Set it True only when the
+leg is on a stand and you intend to command torque. All runtime knobs live in
+params.RUNTIME (bound to `rt` in run()).
 
 Structured after hgeyer's hardware/devcom.py run(): a run() entry point spawned
 as the Process target, hardware initialized AFTER spawn (pysoem master can't be
@@ -33,25 +34,11 @@ from cmu_leg.types.commands import TorqueDesired, DriveCommand
 from cmu_leg.runtime.buffer import StateBuffer, CommandBuffer
 from cmu_leg.runtime.guard import ExIntGuard
 from cmu_leg.utility.recorder import Recorder
+import cmu_leg.config.params as params
 
-MAX_STALE_TICKS = 5   # B3 watchdog: no fresh command for this many ticks -> safe zero
-WARMUP_S = 7.0        # settle time before energizing the drives (ec.enable rises at t >= this)
-SHUTDOWN_S = 1.0      # disable-ramp on teardown: exchange zero cmds w/ enable=False this long,
-                      # walking the drives to SWITCH_ON_DISABLED before close (mirrors main.py)
-COMMAND_MOTORS = True  # BRING-UP GATE: False = enable the drives but always send ZERO torque
-                        # (validate the enable/write FSM path). True = send the real drive command.
-
-# Torque trip guard: if the controller commands more motor torque ff [Nm] than this
-# on either joint -> de-energize and stop the whole run. Set
-# below the controller's own saturation (torque_max = 100 knee / 150 ankle) so it
-# catches a runaway before the ceiling. 
-# 
-# Tune to the torque you expect this session.
-KNEE_TORQUE_TRIP = 50.0    # [Nm]
-ANKLE_TORQUE_TRIP = 50.0   # [Nm]
-
-ENABLE_GRACE_S = 2.0  # after ec.enable rises, warn if the drives haven't reached
-                      # OPERATION_ENABLED within this long (motor power off / STO / fault)
+# All runtime knobs now live in params.RuntimeParams (params.RUNTIME): warmup,
+# COMMAND_MOTORS gate, torque trips, disable-ramp + enable-grace timing, and the
+# B3 staleness watchdog. Bound to `rt` at the top of run().
 
 
 @dataclass
@@ -87,6 +74,7 @@ def run(dt, tmax, buffer, cmd_buf, stop_event, start_time,
         is_verbose (bool): Verbose prints.
     """
     pname = current_process().name
+    rt = params.RUNTIME           # all runtime knobs (warmup, trips, gate, watchdog)
 
     # completion_stage gates teardown so it only touches what actually came up.
     completion_stage = 0
@@ -113,7 +101,7 @@ def run(dt, tmax, buffer, cmd_buf, stop_event, start_time,
             try:
                 ec.enable = False
                 if completion_stage >= 1:
-                    for _ in range(int(SHUTDOWN_S / dt)):
+                    for _ in range(int(rt.shutdown_s / dt)):
                         ec.write(DriveCommand())
             except Exception as e:
                 print(f"{pname}: disable-ramp failed during teardown: {e}")
@@ -198,7 +186,7 @@ def run(dt, tmax, buffer, cmd_buf, stop_event, start_time,
             else:
                 stale_ticks = 0
                 last_cmd_seq = cmd.seq
-            fresh = cmd is not None and stale_ticks < MAX_STALE_TICKS   # <7>
+            fresh = cmd is not None and stale_ticks < rt.max_stale_ticks   # <7>
 
             if fresh:
                 state.standing = cmd.standing
@@ -214,14 +202,14 @@ def run(dt, tmax, buffer, cmd_buf, stop_event, start_time,
             # validation run. (The standing gate is a stopgap -- real stance/swing
             # control should command torque regardless of standing.)
             drive_cmd = (llc.to_drive_command(llo)
-                         if (COMMAND_MOTORS and fresh and state.standing) else DriveCommand())
+                         if (rt.command_motors and fresh and state.standing) else DriveCommand())
 
             # Torque trip guard: gate on the controller's COMMANDED motor torque ff
             # (deterministic, watches what the controller WOULD drive even while
             # COMMAND_MOTORS forces zeros). An over-limit command means something is
             # wrong -> command zero + disable this tick, then stop the whole run.
-            if (abs(llo.knee_motor_torque_ff) > KNEE_TORQUE_TRIP
-                    or abs(llo.ankle_motor_torque_ff) > ANKLE_TORQUE_TRIP):
+            if (abs(llo.knee_motor_torque_ff) > rt.knee_torque_trip
+                    or abs(llo.ankle_motor_torque_ff) > rt.ankle_torque_trip):
                 print(f"[TORQUE TRIP] knee={llo.knee_motor_torque_ff:.2f} "
                       f"ankle={llo.ankle_motor_torque_ff:.2f} Nm -> de-energizing")
                 ec.enable = False
@@ -232,7 +220,7 @@ def run(dt, tmax, buffer, cmd_buf, stop_event, start_time,
             # Energize after the warmup: ec.write drives the CiA-402 FSM toward
             # OPERATION_ENABLED whenever ec.enable is True. Set enable BEFORE the
             # write so this tick's control word reflects it.
-            ec.enable = t >= WARMUP_S
+            ec.enable = t >= rt.low_warmup_s
             frame = ec.write(drive_cmd)   # one PDO exchange/tick; returns fresh inputs
 
             # --- drive-enable feedback (parity with main.py's reached_enabled) ---
@@ -245,12 +233,12 @@ def run(dt, tmax, buffer, cmd_buf, stop_event, start_time,
                 reached_enabled = True
                 print(f"[{t:6.3f}s] drives OPERATION_ENABLED")
             elif (enable_since is not None and not reached_enabled and not warned_enable
-                  and t - enable_since > ENABLE_GRACE_S):
+                  and t - enable_since > rt.enable_grace_s):
                 warned_enable = True
                 knee_st = drive_state(frame.knee_status_word).name
                 ankle_st = drive_state(frame.ankle_status_word).name
                 print(f"[{t:6.3f}s] WARNING: drives did NOT reach OPERATION_ENABLED "
-                      f"{ENABLE_GRACE_S:.0f}s after enable (knee={knee_st}, ankle={ankle_st}). "
+                      f"{rt.enable_grace_s:.0f}s after enable (knee={knee_st}, ankle={ankle_st}). "
                       f"Check motor power / STO / faults.")
 
             if stop_event.is_set():

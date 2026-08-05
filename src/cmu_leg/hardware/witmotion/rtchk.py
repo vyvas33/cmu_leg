@@ -73,6 +73,7 @@ import time
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+from cmu_leg.config.params import IMU
 
 # pin to core 1 for realtime control
 if sys.platform.startswith("linux"):
@@ -98,7 +99,7 @@ else:
     print("IMU type unknown. Use either 'wit' or 'tss'")
     exit(1)
 
-port = discover_port()
+port = IMU.foot_port
 baud = discover_baud(port)
 imu = ImuSensor(port=port, baud_bps=baud)
 

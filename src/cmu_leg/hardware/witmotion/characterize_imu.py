@@ -28,6 +28,7 @@ import numpy as np
 import scipy.signal
 import scipy.stats
 from cmu_leg.utility.utils import make_run_dir
+from cmu_leg.config.params import IMU
 
 # Setup search path so drivers can be resolved when executing directly
 if __name__ == "__main__" and not __package__:
@@ -44,9 +45,12 @@ else:
     print("IMU type unknown. Use either 'wit' or 'tss'")
     exit(1)
 
+# Set IMU here
+PORT = IMU.foot_port
+RUN_NAME = "imu_char_fo" #th for thigh and fo for foot
 
 RECORD_DATA = True  # True to record live data; False to analyze existing data file
-DURATION = 10.0  # [s]
+DURATION = 30.0  # [s]
 DATA_FILE = ""  # Path to an existing .npz recording; only used when RECORD_DATA is False
 
 
@@ -70,14 +74,14 @@ def record_data(imu_type, duration, save_dir):
         Path to the saved .npz recording.
     """
 
-    port = discover_port()
+    port = PORT
     baud_bps = discover_baud(port)
-    sensor = ImuSensor(port=port, baud_bps=460800)
+    sensor = ImuSensor(port=port, baud_bps=baud_bps)
 
     try:
         sensor.connect()
-        sensor.set_streaming_rate(500)
-        sensor.set_lpf(188)
+        sensor.set_streaming_rate(1000)
+        sensor.set_lpf(256)
         sensor.set_outputs(ts=False, acc=True, gyro=True, ang=False, mag=True, quat=False)
 
         sensor.show_config()
@@ -690,7 +694,7 @@ def main():
 
     # 1. Recording Live Data (figures are written alongside the recording they came from)
     if RECORD_DATA:
-        save_dir = make_run_dir("imu_char")
+        save_dir = make_run_dir(RUN_NAME)
         data_path = record_data(imu_type=IMU_TYPE, duration=DURATION, save_dir=save_dir)
     else:
         if not DATA_FILE:

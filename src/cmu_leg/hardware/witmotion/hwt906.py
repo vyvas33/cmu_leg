@@ -41,7 +41,6 @@ import math
 import struct
 import threading
 import time
-import traceback
 from collections import deque
 
 import serial
@@ -270,8 +269,6 @@ class WitMotionSensor:
     _OUTPUT_LIST_FIELDS = {
         0x51: ("acc", 3), 0x52: ("gyro", 3), 0x53: ("angle", 3), 0x54: ("mag", 3), 0x59: ("quat", 4)
     }
-    # RSW register 0x02 bitmask layout: (bit index, packet ID) in hardware transmission order.
-    _RSW_BITS = ((0, 0x50), (1, 0x51), (2, 0x52), (3, 0x53), (4, 0x54), (9, 0x59))
     # fmt: on
 
     def __init__(self, port: str | None = None, baud_bps: int = 921600):
@@ -414,14 +411,6 @@ class WitMotionSensor:
         self._acc_ndigits = math.ceil(-math.log10(self.acc_range / 32768.0 * self._STANDARD_GRAVITY))
         self._gyro_ndigits = math.ceil(-math.log10(self.gyro_range / 32768.0 * (math.pi / 180.0)))
 
-        # Sync the device's current output selection (RSW register 0x02) into driver
-        # state so _packet_ids reflects what the hardware actually streams. This lets
-        # stream() work against the on-board config without a mandatory set_outputs()
-        # call, and keeps the parser's provisioned slots aligned with the wire.
-        rsw = self._read_registers(0x02, 1)[0]
-        self._packet_ids = {pid for bit, pid in self._RSW_BITS if rsw & (1 << bit)}
-        self._trigger_packet_id = max(self._packet_ids) if self._packet_ids else None
-
     @_config_only
     def sleep(self):
         """
@@ -505,6 +494,23 @@ class WitMotionSensor:
 
         self.chksum_error = 0
         self.data_frames_rcvd = 0
+
+        # Reset timing state so this stream() call gets a fresh reference point.
+        self._ref_time = None
+        self._data_ts = None
+        self._inter_sample_periods = None
+        self._days_counter = 0
+        self._host_ref_time = None
+        self._host_data_ts_estimate = None
+
+        # Manually discard buffered data transmitted by the sensor previously (reset_input_buffer() unreliable on macOS).
+        drain_deadline = time.perf_counter() + 0.25
+        while time.perf_counter() < drain_deadline:
+            waiting = self._connection.in_waiting
+            if waiting > 0:
+                self._connection.read(waiting)
+            else:
+                time.sleep(0.5 / self.rate)
 
         self._listening = True
         self._parser_thread = threading.Thread(
@@ -634,10 +640,16 @@ class WitMotionSensor:
         """
         # self._check_bandwidth(sum((ts, acc, gyro, ang, mag, quat)), self.rate, self.baud)
 
-        requested = {0x50: ts, 0x51: acc, 0x52: gyro, 0x53: ang, 0x54: mag, 0x59: quat}
         val, active = 0, set()
-        for bit, pid in self._RSW_BITS:
-            if requested[pid]:
+        for enabled, bit, pid in [
+            (ts, 0, 0x50),
+            (acc, 1, 0x51),
+            (gyro, 2, 0x52),
+            (ang, 3, 0x53),
+            (mag, 4, 0x54),
+            (quat, 9, 0x59),
+        ]:
+            if enabled:
                 val |= 1 << bit
                 active.add(pid)
 
@@ -645,16 +657,6 @@ class WitMotionSensor:
             raise ValueError("At least one output must remain enabled.")
 
         self._write_register(0x02, val)
-
-        # Verify the write landed. _write_register is fire-and-forget, and an unapplied
-        # RSW change leaves the device streaming a different set than _packet_ids expects,
-        # which surfaces later as a parser-thread crash on an unprovisioned slot.
-        readback = self._read_registers(0x02, 1)[0]
-        if readback != val:
-            raise RuntimeError(
-                f"RSW output register write failed: wrote {val:#06x}, device reports {readback:#06x}. "
-                "Config did not take — retry, and check that the sensor is not streaming during set_outputs()."
-            )
 
         # Configure local trigger packet to match the last packet in transmission order
         self._packet_ids = active
@@ -822,14 +824,12 @@ class WitMotionSensor:
     @_config_only
     def set_filter_coefficient(self, filtk_val):
         """
-        Configure the sensor's internal attitude smoothing filter (Register 0x25).
+        Configure the sensor's internal dynamic filtering coefficient (Register 0x25, FILTK).
 
-        Note: This parameter controls the internal Kalman filtering for the calculated
-        attitude (Euler angles/quaternions) only. It does NOT apply low-pass filtering to
-        raw outputs (Acc/Gyro); raw filtering must be set using set_lpf().
+        Range: 1 (max smoothing, most lag) to 10000 (minimal smoothing, most real-time). Hardware default: 30.
 
         Args:
-            filtk_val (int): Filter coefficient between 1 (minimal smoothing) and 10000 (maximum smoothing).
+            filtk_val (int): Filter coefficient, 1-10000.
         """
         if not (1 <= filtk_val <= 10000):
             raise ValueError("Filter coefficient must be between 1 and 10000.")
@@ -971,12 +971,19 @@ class WitMotionSensor:
         offsets = self.get_offsets()
 
         rsw = chunk1[0]
-        rsw_labels = {0x50: "Time", 0x51: "Acc", 0x52: "Gyro", 0x53: "Angle", 0x54: "Mag", 0x59: "Quat"}
         enabled_outputs = [
-            f"{rsw_labels[pid]} ({pid:#04x})"
-            for bit, pid in self._RSW_BITS
+            f"{lbl} ({pid})"
+            for bit, lbl, pid in [
+                (0, "Time", "0x50"),
+                (1, "Acc", "0x51"),
+                (2, "Gyro", "0x52"),
+                (3, "Angle", "0x53"),
+                (4, "Mag", "0x54"),
+                (9, "Quat", "0x59"),
+            ]
             if rsw & (1 << bit)
         ]
+        config = {"active_outputs": enabled_outputs}
         print(f"Active Modalities (RSW 0x02):   {', '.join(enabled_outputs)}")
         rate_inv = {v: k for k, v in self._RATE_MAP.items()}
         baud_inv = {v: k for k, v in self._BAUD_MAP.items()}
@@ -990,34 +997,52 @@ class WitMotionSensor:
         gyro_opts = ", ".join(str(k) for k in self._GYRO_RANGE_MAP)
         acc_opts = ", ".join(str(k) for k in self._ACC_RANGE_MAP)
 
+        config["rate_hz"] = rate_inv[chunk1[1]]
+        config["baud_bps"] = baud_inv[chunk1[2]]
+        config["lpf_hz"] = lpf_inv[chunk2[0]]
         print(f"Output Return Rate (0x03):      {rate_inv[chunk1[1]]} Hz  [options: {rate_opts} Hz]")
         print(f"Baud Rate (0x04):               {baud_inv[chunk1[2]]} bps  [options: {baud_opts} bps]")
         print(f"LPF Cutoff Frequency (0x1F):    {lpf_inv[chunk2[0]]} Hz  [options: {lpf_opts} Hz]")
 
         hw_gyro_range = gyro_inv[chunk2[1]]
         gyro_res = hw_gyro_range / 32768.0
+        config["gyro_range_dps"] = hw_gyro_range
+        config["gyro_res_dps_per_lsb"] = gyro_res
         print(
             f"Gyroscope Range (0x20):         ±{hw_gyro_range} dps with {gyro_res:.6f} dps/LSB [options: ±{gyro_opts} dps]"
         )
 
         hw_acc_range = acc_inv[chunk2[2]]
         acc_res = hw_acc_range / 32768.0
+        config["acc_range_g"] = hw_acc_range
+        config["acc_res_g_per_lsb"] = acc_res
+        config["standard_gravity"] = self._STANDARD_GRAVITY
         print(
             f"Accelerometer Range (0x21):     ±{hw_acc_range} g with {acc_res:.6f} g/LSB and g = {self._STANDARD_GRAVITY} m/s² [options: ±{acc_opts} g]"
         )
 
+        config["mounting_orientation"] = "Vertical" if chunk3[0] == 1 else "Horizontal"
+        config["attitude_algorithm"] = "6-axis" if chunk3[1] == 1 else "9-axis"
+        config["filtk"] = chunk3[2]
         print(f"Mounting Orientation (0x23):    {'Vertical' if chunk3[0] == 1 else 'Horizontal'}")
         print(f"Attitude Algorithm (0x24):      {'6-axis' if chunk3[1] == 1 else '9-axis'}")
         print(f"Smoothing Filter FILTK (0x25):  {chunk3[2]}")
 
+        config["gyro_autocal_enabled"] = chunk4[0] != 1
         print(f"Gyro Auto-Calibration (0x63):   {'Disabled' if chunk4[0] == 1 else 'Enabled'}")
 
+        config["acc_offset"] = offsets["acc_offset"]
+        config["gyro_offset"] = offsets["gyro_offset"]
+        config["mag_offset"] = offsets["mag_offset"]
         print("Manual Bias Offsets (0x05–0x0D)")
         print(f" ... Acc Offsets  (X,Y,Z):      {offsets['acc_offset']}")
         print(f" ... Gyro Offsets (X,Y,Z):      {offsets['gyro_offset']}")
         print(f" ... Mag Offsets  (X,Y,Z):      {offsets['mag_offset']}")
 
+        config["led_enabled"] = led_reg[0] != 1
         print(f"Status LED (0x1B):              {'Disabled' if led_reg[0] == 1 else 'Enabled'}\n\n")
+
+        return config
 
     # --------------------------------------
     # 4. LOW-LEVEL REGISTER ACCESS (PRIVATE)
@@ -1160,11 +1185,6 @@ class WitMotionSensor:
                         if result is None:
                             break
                         ptype, payload = result
-                        # The device retains its on-board output register across sessions, so it
-                        # may stream packet types the current set_outputs() did not provision a
-                        # slot for. Ignore those instead of assigning into a None slot.
-                        if ptype not in self._packet_ids:
-                            continue
                         self._parse_packet_payload(ptype, payload)  # parse packet payload
                         received_this_cycle.add(ptype)
                         if ptype == self._trigger_packet_id:
@@ -1184,7 +1204,6 @@ class WitMotionSensor:
                     time.sleep(0.5 / self.rate)
         except Exception as e:
             print(f"\n[Parsing thread crash] {type(e).__name__}: {e}")
-            traceback.print_exc()
 
     def _next_packet(self, buffer):
         """
@@ -1290,16 +1309,15 @@ class WitMotionSensor:
 
         host_time_s is anchored to imu_ts's own timescale at the first complete frame,
         so their difference reflects true wire/parsing latency instead of an arbitrary
-        startup offset between two independently-zeroed clocks.
+        startup offset between two independently-zeroed clocks. If the Time packet
+        (0x50) is disabled (ts=False in set_outputs()), there is no device timescale to
+        anchor to, so host_time_s falls back to tracking elapsed host time directly.
         """
         host_raw_time = time.perf_counter()
 
         if self._host_ref_time is None:
-            # Anchor host_time_s to the sensor's own timescale when the time packet (0x50)
-            # is streamed; otherwise there is no imu_ts to align to, so anchor to the host
-            # clock zeroed at the first complete frame (host_time_s starts at 0).
-            sensor_ts = self._sensor_data["time_s"]
-            self._host_ref_time = host_raw_time - (sensor_ts if sensor_ts is not None else 0.0)
+            time_s = self._sensor_data["time_s"]
+            self._host_ref_time = host_raw_time - (time_s if time_s is not None else 0.0)
 
         # noisy measurement of data timestamp in host
         host_data_ts = host_raw_time - self._host_ref_time

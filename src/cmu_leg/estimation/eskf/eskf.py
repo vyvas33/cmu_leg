@@ -67,6 +67,7 @@ R_BODY_SENSOR_FO = np.array([[-1.0, 0.0, 0.0],
 # Error-state block starts (thigh 0:15, foot 15:30; sub-order matches
 # measurements.py _blk: [dtheta, dw_b, dp, dv, da_b]). Each measurement's H is
 # a 3x3 identity at one of these, so _kalman_update takes the start index.
+TH_DTH = 0    # thigh attitude   (vel loop closure, extra block)
 TH_DP = 6     # thigh position   (pos loop closure)
 TH_DV = 9     # thigh velocity   (vel loop closure)
 FO_DV = 24    # foot velocity    (zupt)
@@ -301,27 +302,44 @@ class ESKF:
             self.fo, self.th, state, self.P, self.R_enc, self.R_model_pos)
         self._kalman_update(r, TH_DP, V)
 
-        r, V = meas_vel_loop_closure(
+        r, V, H_att = meas_vel_loop_closure(
             self.fo, self.th, state, theta_dot, w_m_fo, self.P,
             self.R_rate, self.R_model_vel)
-        self._kalman_update(r, TH_DV, V)
+        # H_att = +R_th @ hat(V_b_nt[:3]) observes thigh attitude off the same
+        # velocity residual (the draft's dropped block). Without it thigh pitch
+        # rides gyro integration and drifts -- see cfg.correct_thigh_attitude.
+        extra = [(TH_DTH, H_att)] if self.cfg.correct_thigh_attitude else None
+        self._kalman_update(r, TH_DV, V, extra)
 
-    def _kalman_update(self, r, b, V):
-        # Every measurement's H is a 3x3 identity selecting the error-state
-        # block at column b (b:b+3), so the full 30x30 Joseph form collapses to
-        # slices: H @ P == P[b:b+3, :], P @ H.T == P[:, b:b+3]. This is the SAME
-        # Joseph update (I-KH) P (I-KH).T + K V K.T, just with the zeros of H
-        # skipped -- no 3x30 H, no 30x30 eye, one 3x3 inverse.
+    def _kalman_update(self, r, b, V, extra=None):
+        # H is a 3x3 identity selecting the error-state block at column b, PLUS
+        # any `extra` = [(offset, M3x3), ...] blocks (M at cols offset:offset+3).
+        # The Joseph form (I-KH) P (I-KH).T + K V K.T is computed with the zeros
+        # of H skipped: each H@P / P@H.T is a sum over the live blocks. With
+        # extra=None this is byte-for-byte the old single-identity-block update.
         P = self.P
-        Pcol = P[:, b:b + 3]                     # P @ H.T          (30x3)
-        Prow = P[b:b + 3, :]                      # H @ P            (3x30)
-        S = Prow[:, b:b + 3] + V                  # H P H.T + V      (3x3)
-        K = Pcol @ np.linalg.inv(S)               # gain             (30x3)
+
+        PHt = P[:, b:b + 3].copy()                # P @ H.T          (30x3)
+        Prow = P[b:b + 3, :].copy()               # H @ P            (3x30)
+        if extra:
+            for off, M in extra:
+                PHt = PHt + P[:, off:off + 3] @ M.T
+                Prow = Prow + M @ P[off:off + 3, :]
+
+        S = PHt[b:b + 3, :] + V                    # H P H.T + V      (3x3)
+        if extra:
+            for off, M in extra:
+                S = S + M @ PHt[off:off + 3, :]
+        K = PHt @ np.linalg.inv(S)                # gain             (30x3)
         self.del_x = K @ r
 
-        MP = P - K @ Prow                         # (I - K H) P      (30x30)
-        # (I - K H) P (I - K H).T + K V K.T; MP @ (I-KH).T touches cols b:b+3
-        self.P = MP - MP[:, b:b + 3] @ K.T + K @ V @ K.T
+        MP = P - K @ Prow                          # (I - K H) P      (30x30)
+        MHt = MP[:, b:b + 3].copy()                # MP @ H.T         (30x3)
+        if extra:
+            for off, M in extra:
+                MHt = MHt + MP[:, off:off + 3] @ M.T
+        # (I - K H) P (I - K H).T + K V K.T
+        self.P = MP - MHt @ K.T + K @ V @ K.T
 
         # inject the error into each nominal state
         for body, offset in ((self.th, 0), (self.fo, 15)):

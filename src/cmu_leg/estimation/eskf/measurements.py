@@ -1,7 +1,10 @@
-"""ESKF measurement models: each returns (r, V) for one sequential update.
+"""ESKF measurement models: each returns (r, V) for one sequential update
+(the velocity closure additionally returns a 3x3 thigh-attitude H block).
 
-Every H is a 3x3 identity selecting one error-state block, so it is not built or
+Most H are a 3x3 identity selecting one error-state block, so it is not built or
 returned -- eskf._kalman_update keys off the block start index (TH_DP/TH_DV/FO_DV).
+The velocity closure is the exception: its residual also depends on thigh
+attitude, so it returns that extra Jacobian block for _kalman_update's `extra`.
 
 DRAFT -- verify signs, the error-state layout, and the V constructions before
 trusting. Runtime path only: numpy, no sympy. The closed forms here are
@@ -242,4 +245,11 @@ def meas_vel_loop_closure(fo, th, enc, theta_dot_enc, foot_gyro, P,
 
     V_rate = J_lin @ R_rate @ J_lin.T
     V = V_foot + V_rate + R_model
-    return r, V
+
+    # Thigh-attitude Jacobian block for H (the term the cascade draft dropped).
+    # y = R_th @ V_b_nt[:3], and under the local/right error R_true=R_nom(I+hat)
+    # dh/d(dtheta_th) = +R_th @ hat(V_b_nt[:3]) in the same (+I on dv) sign family
+    # as this closure's velocity block. Numerically verified vs finite diff of y.
+    # Caller decides whether to use it (cfg.correct_thigh_attitude).
+    H_dth_th = R_th @ hat(V_b_nt[:3])
+    return r, V, H_dth_th

@@ -34,12 +34,14 @@ from cmu_leg.estimation.eskf.eskf import ESKF
 from cmu_leg.control.high_level_control import ProsthesisControl
 from cmu_leg.control.utils import BackwardDifference
 from cmu_leg.types.state import ProsthesisState
+from cmu_leg.types.commands import Mode
+from cmu_leg.runtime.operator import TerminalOperator, TimedOperator
 from cmu_leg.runtime.buffer import StateBuffer, CommandBuffer
 from cmu_leg.runtime.guard import ExIntGuard
 from cmu_leg.utility.recorder import Recorder
 import cmu_leg.config.params as params
 
-# The standing schedule starts at params.RUNTIME.control_warmup_s (bound to `rt`
+# Standing is the resting request (see runtime.operator); the drives gate it
 # in run()). TODO: replace the time schedule with the real mode FSM / supervisor.
 
 
@@ -75,7 +77,7 @@ def run(dt, tmax, buffer, cmd_buf, stop_event, start_time,
     No init_evnt here: nothing downstream is gated on control coming up.
     """
     pname = current_process().name
-    rt = params.RUNTIME           # runtime knobs (control_warmup_s here)
+    rt = params.RUNTIME           # runtime knobs
 
     completion_stage = 0
 
@@ -85,6 +87,9 @@ def run(dt, tmax, buffer, cmd_buf, stop_event, start_time,
             for lg in (state_log, torque_log, timing_log):
                 lg.save(run_dir)
             imu.close()
+            # TerminalOperator puts the tty in cbreak; without this the shell is
+            # left with no echo and no line buffering after every run.
+            operator.close()
         if is_verbose:
             print(f"{pname}: terminated gracefully.")
 
@@ -96,14 +101,30 @@ def run(dt, tmax, buffer, cmd_buf, stop_event, start_time,
         eskf = ESKF()
         hip_accel = BackwardDifference()
         pc = ProsthesisControl()
+        # Operator intent. TerminalOperator needs a tty; in the spawned control
+        # process stdin usually is not one, so it reports .available and we fall
+        # back to the scripted source -- which is also what any headless or
+        # replay run wants, because it is the only deterministic one.
+        operator = TerminalOperator()
+        if not operator.available:
+            operator = TimedOperator()
+            print(f"[{pname}] operator: timed, standing requested from the "
+                  f"start; stands once the drives report enabled")
         state = ProsthesisState()   # this process's OWN local bus
 
-        num_cycles = floor(tmax / dt) + 1
+        # tmax counts from the first ACTUATING tick, not from t0, so warmup
+        # does not eat the run. Both processes detect that moment independently
+        # -- control from its own FSM, low-level from the mode on the command it
+        # receives -- which differ by one IPC hop (sub-ms) and need no extra
+        # shared state. `max_arm_wait_s` bounds a run that never arms.
+        num_cycles = floor((rt.max_arm_wait_s + tmax) / dt) + 1
+        t_armed = None            # t of the first actuating tick
         state_log = Recorder("control_prosthesis_state")  # full ProsthesisState (incl. hip_*)
         torque_log = Recorder("control_torque")   # TorqueDesired each tick
         timing_log = Recorder("control_idle")     # LoopStats (idle margin + measured dt)
 
         completion_stage = 1
+        # restore the terminal on the way out if we grabbed it
 
         # --- RT gc hygiene (mirrors main.py) ---------------------------------
         gc.collect()
@@ -146,13 +167,22 @@ def run(dt, tmax, buffer, cmd_buf, stop_event, start_time,
             if eskf.initialized:
                 state.hip_accel = hip_accel.compute(state.hip_velocity, dt_meas)
 
-            # --- mode decision + high-level policy (co-located, no extra hop) --
-            # control OWNS `standing` (the low-level copy is inert on B1). TODO:
-            # real mode FSM / supervisor; time-based stand-in now.
-            state.standing = t > rt.control_warmup_s
-            # state.standing = False  # comment out line to send real torques.
-            desired = pc.compute(state, t)              # TorqueDesired
-            cmd_buf.publish(desired, state.standing)    # -> B3, down to low-level
+            # --- mode FSM + high-level policy (co-located, no extra hop) -------
+            # control OWNS the mode; the low level derives `actuate` and the
+            # knee extension-stop suppression from it.
+            op = operator.read(t)
+            desired = pc.compute(state, t, op, dt_meas)   # TorqueDesired
+            state.standing = pc.mode is Mode.STANDING     # for logging/consumers
+            cmd_buf.publish(desired, pc.mode)             # -> B3, down to low-level
+
+            # arm the run window on the first actuating tick, then end tmax
+            # later. Checked after logging (below) so the last tick is recorded,
+            # matching low-level.
+            if t_armed is None and pc.mode.actuate:
+                t_armed = t
+                print(f"[{pname}] armed at t={t:.2f}s ({pc.mode.name}); "
+                      f"running {tmax}s")
+            armed_expired = t_armed is not None and t - t_armed >= tmax
 
             if stop_event.is_set():
                 return
@@ -163,6 +193,9 @@ def run(dt, tmax, buffer, cmd_buf, stop_event, start_time,
             torque_log.append(t, desired)
             timing_log.append(t, LoopStats(idle, dt_meas))
             sleep(idle) if idle >= 0.0 else sleep(0.0)
+
+            if armed_expired:
+                break
 
             cycle += 1
     # (ExIntGuard runs terminate_gracefully on exit -- no finally needed)

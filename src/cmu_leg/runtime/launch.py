@@ -57,25 +57,6 @@ DT_LOW = 1.0 / params.COMMON.sample_rate              # low-level loop period (s
 DT_CONTROL = 1.0 / params.COMMON.control_sample_rate  # control loop period (s)
 
 
-def _check_warmups(rt):
-    """Fail fast if the standing min-jerk would start before torque can flow.
-
-    control_warmup_s (min-jerk start) must clear low_warmup_s (drive enable) plus
-    the enable-walk + startup-mute lag, or the ramp elapses into a dead drive and
-    the leg snaps to setpoint. This is the exact bug that produced the 11 Hz
-    'oscillation'; the assertion makes it un-shippable rather than silent.
-    """
-    live = rt.low_warmup_s + rt.actuation_warmup_margin_s
-    if rt.control_warmup_s < live:
-        raise SystemExit(
-            f"MAIN: RuntimeParams warmup desync -- control_warmup_s "
-            f"({rt.control_warmup_s}s) must be >= low_warmup_s + "
-            f"actuation_warmup_margin_s ({rt.low_warmup_s} + "
-            f"{rt.actuation_warmup_margin_s} = {live}s). The standing min-jerk "
-            f"would start before torque is deliverable and the leg would snap "
-            f"instead of ramping. Raise control_warmup_s in params.RUNTIME.")
-
-
 def _git_info():
     """Best-effort {commit, dirty} so a run's log pins the exact code. None on any
     failure (not a repo / git missing) -- never blocks a run."""
@@ -109,7 +90,6 @@ def _dump_config(run_dir):
 
 def main():
     rt = params.RUNTIME
-    _check_warmups(rt)
     run_dir = make_run_dir("multiprocess")
     _dump_config(run_dir)
 
@@ -180,7 +160,10 @@ def main():
         t0 = start_time.value or perf_counter()
 
         # --- monitor until the children finish, fault, or we're interrupted --
-        deadline = t0 + rt.tmax + 1.0
+        # tmax now runs from the first actuating tick, which the operator may
+        # take up to max_arm_wait_s to trigger, so the parent's liveness
+        # deadline has to cover the wait as well as the run.
+        deadline = t0 + rt.max_arm_wait_s + rt.tmax + 1.0
         while any(p.is_alive() for p in procs) and perf_counter() < deadline:
             if stop_event.wait(timeout=0.5):
                 break

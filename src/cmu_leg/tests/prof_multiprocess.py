@@ -28,6 +28,7 @@ import statistics
 from cmu_leg.estimation.proprioceptive_estimator import ProprioceptiveEstimator
 from cmu_leg.estimation.eskf.eskf import ESKF
 from cmu_leg.control.high_level_control import ProsthesisControl
+from cmu_leg.runtime.operator import OperatorInput
 from cmu_leg.control.low_level_control import LowLevelControl
 from cmu_leg.types.sensors import RawEtherCATFrame, IMUFrame
 from cmu_leg.runtime.buffer import StateBuffer, CommandBuffer
@@ -83,16 +84,17 @@ def main():
         c = [time.perf_counter()]
         proprio.update(frame, dt);                                       c.append(time.perf_counter())
         eskf.update(imu, state, t, dt);                                  c.append(time.perf_counter())
-        state.standing = True
-        desired = pc.compute(state, t);                                  c.append(time.perf_counter())
-        llo = llc.compute(state, desired_torque=desired,
-                          control_enabled=True, dt=dt);                  c.append(time.perf_counter())
+        state.control_enabled = True   # FSM needs the drives up (+ enable_dwell)
+        op = OperatorInput(standing_toggle=True, hold_toggle=False, seq=k)
+        desired = pc.compute(state, t, op, dt);                          c.append(time.perf_counter())
+        llo = llc.compute(state, desired_torque=desired, control_enabled=True,
+                          dt=dt, actuate=pc.mode.actuate);               c.append(time.perf_counter())
         llc.to_drive_command(llo);                                       c.append(time.perf_counter())
         b1.publish(state);                                               c.append(time.perf_counter())
         b1.latest();                                                     c.append(time.perf_counter())
         b2.publish(state);                                               c.append(time.perf_counter())
         b2.latest();                                                     c.append(time.perf_counter())
-        b3.publish(desired, True);                                       c.append(time.perf_counter())
+        b3.publish(desired, pc.mode);                                       c.append(time.perf_counter())
         b3.latest();                                                     c.append(time.perf_counter())
 
         if rec:

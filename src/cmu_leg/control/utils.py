@@ -86,6 +86,55 @@ class BackwardDifference:
         self._u_prev = u
         return y
 
+class PID:
+    """Discrete pid: forward Euler on both the integrator and the derivative
+    filter, filter coefficient n, no output saturation and no anti-windup.
+
+        u   = kp*e + xi + n*(kd*e - xf)      <- pre-update states
+        xi += dt * ki * e
+        xf += dt * n*(kd*e - xf)
+
+    Taking the output from the pre-update states is what makes it forward Euler;
+    updating first would be backward Euler and shift the effective gains by a
+    tick.
+
+    The filter recursion realises kd*s/(1 + s/n), so xf tracks the derivative
+    through a first-order lag and n is the derivative bandwidth in rad/s.
+
+    `error` is setpoint minus measurement, so the d term acts on the error and
+    responds to a moving setpoint. Damping the measurement instead brakes
+    commanded motion; see StandingController for a case where that is wanted.
+
+    dt is required and clamped to [COMMON.dt_min, COMMON.dt_max], same reasoning
+    as BackwardDifference: a stalled tick must not integrate as one big step.
+    """
+
+    def __init__(self, kp: float, ki: float, kd: float, n: float,
+                 dt_min: float = COMMON.dt_min, dt_max: float = COMMON.dt_max):
+        self._kp = kp
+        self._ki = ki
+        self._kd = kd
+        self._n = n
+        self._dt_min = dt_min
+        self._dt_max = dt_max
+        self._xi = 0.0
+        self._xf = 0.0
+
+    def reset(self) -> None:
+        """Zero the integrator and filter states. Call on entry into the phase
+        this pid serves, so nothing carries across from the previous one."""
+        self._xi = 0.0
+        self._xf = 0.0
+
+    def compute(self, error: float, dt: float) -> float:
+        dt = min(max(dt, self._dt_min), self._dt_max)
+        d_out = self._n * (self._kd * error - self._xf)
+        u = self._kp * error + self._xi + d_out
+        self._xi += dt * self._ki * error
+        self._xf += dt * d_out
+        return u
+
+
 class MedianFilter:
     def __init__(self, window: int = 3):
         self._buffer = collections.deque(maxlen=window)
@@ -96,4 +145,5 @@ class MedianFilter:
     def compute(self, x):
         self._buffer.append(x)
         return statistics.median(self._buffer)
-        
+
+

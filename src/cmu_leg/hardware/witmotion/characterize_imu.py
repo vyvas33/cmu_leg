@@ -45,9 +45,9 @@ else:
     exit(1)
 
 
-RECORD_DATA = True  # True to record live data; False to analyze existing data file
+RECORD_DATA = False  # True to record live data; False to analyze existing data file
 DURATION = 10.0  # [s]
-DATA_FILE = ""  # Path to an existing .npz recording; only used when RECORD_DATA is False
+DATA_FILE = "output/2026-08-05_155156_imu_char_fo/wit_data.npz"  # Path to an existing .npz recording; only used when RECORD_DATA is False
 
 
 # Color system for plots (Tableau 10 soft colors)

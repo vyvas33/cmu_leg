@@ -25,6 +25,9 @@ import statistics
 
 from cmu_leg.estimation.state_estimator import ProsthesisStateEstimator
 from cmu_leg.control.high_level_control import ProsthesisControl
+from cmu_leg.runtime.operator import OperatorInput
+from cmu_leg.types.commands import Mode
+from cmu_leg.config.params import MODE
 from cmu_leg.control.low_level_control import LowLevelControl
 from cmu_leg.types.sensors import RawEtherCATFrame, IMUFrame
 
@@ -71,15 +74,24 @@ def main():
 
         a0 = time.perf_counter()
         state = se.get_state(frame, imu, k * 0.001, 0.001)
-        state.standing = True
+        # Drive the mode FSM into STANDING: it needs the drives enabled, a
+        # standing request, and enable_dwell elapsed. N_WARM must cover the
+        # dwell or every recorded tick profiles INITIALIZING (which returns
+        # early with zero torque) and the numbers mean nothing.
+        state.control_enabled = True
+        op = OperatorInput(standing_toggle=True, hold_toggle=False, seq=k)
         a1 = time.perf_counter()
-        desired = pc.compute(state, k * 0.001)
+        desired = pc.compute(state, k * 0.001, op, 0.001)
         a2 = time.perf_counter()
-        llo = llc.compute(state, desired_torque=desired, control_enabled=True, dt=0.001)
+        llo = llc.compute(state, desired_torque=desired, control_enabled=True,
+                          dt=0.001, actuate=pc.mode.actuate)
         a3 = time.perf_counter()
         llc.to_drive_command(llo)
         a4 = time.perf_counter()
 
+        assert not rec or pc.mode is Mode.STANDING, (
+            f"profiling {pc.mode.name}, not STANDING -- raise N_WARM above "
+            f"MODE.enable_dwell ({MODE.enable_dwell}s = {int(MODE.enable_dwell*1000)} ticks)")
         if rec:
             t_est.append(a1 - a0)
             t_hi.append(a2 - a1)

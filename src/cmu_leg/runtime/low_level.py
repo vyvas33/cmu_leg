@@ -230,13 +230,24 @@ def run(dt, tmax, buffer, cmd_buf, stop_event, start_time,
             # meant walking could never move the motors.
             drive_cmd = (llc.to_drive_command(llo)
                          if (rt.allow_motion and fresh and mode.actuate) else DriveCommand())
+            # Per-joint gate, at the wire: upstream still computes and logs, so a
+            # gated joint's commanded torque stays visible for diagnosis.
+            if not rt.drive_knee:
+                drive_cmd.knee_velocity_counts = 0
+                drive_cmd.knee_torque_per_mille = 0
+            if not rt.drive_ankle:
+                drive_cmd.ankle_velocity_counts = 0
+                drive_cmd.ankle_torque_per_mille = 0
 
             # Torque trip guard: gate on the controller's COMMANDED motor torque ff
             # (deterministic, watches what the controller WOULD drive even while
             # allow_motion=False forces zeros). An over-limit command means something is
             # wrong -> command zero + disable this tick, then stop the whole run.
-            if (abs(llo.knee_motor_torque_ff) > rt.knee_torque_trip
-                    or abs(llo.ankle_motor_torque_ff) > rt.ankle_torque_trip):
+            # A gated joint is not driven, so its command is informational and
+            # must not be able to stop the run.
+            if ((rt.drive_knee and abs(llo.knee_motor_torque_ff) > rt.knee_torque_trip)
+                    or (rt.drive_ankle
+                        and abs(llo.ankle_motor_torque_ff) > rt.ankle_torque_trip)):
                 print(f"[TORQUE TRIP] knee={llo.knee_motor_torque_ff:.2f} "
                       f"ankle={llo.ankle_motor_torque_ff:.2f} Nm -> de-energizing")
                 ec.enable = False

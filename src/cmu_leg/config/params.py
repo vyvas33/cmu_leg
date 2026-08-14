@@ -85,6 +85,13 @@ class RuntimeParams:
     # So the leg is stiff, not limp, and nothing MOVES. (Was `command_motors`,
     # which read as "do not command the motors" when we very much still do.)
     allow_motion: bool = False
+    # Per-joint drive gate, applied at the wire in low_level.run(). False sends a
+    # zero DriveCommand for that joint -- which in CSV is target velocity zero,
+    # so the drive holds it rather than leaving it free. Everything upstream
+    # still runs and still logs, so the joint's commanded torque stays visible.
+    # Ankle off while its torque loop limit-cycles near 42 Hz.
+    drive_knee: bool = True
+    drive_ankle: bool = False
     knee_torque_trip: float = 50.0      # de-energize + stop if |knee motor torque ff| exceeds [Nm]
     ankle_torque_trip: float = 50.0     # same, ankle [Nm]
     enable_grace_s: float = 2.0         # warn if not OPERATION_ENABLED this long after enable [s]

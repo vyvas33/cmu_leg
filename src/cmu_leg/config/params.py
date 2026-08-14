@@ -84,7 +84,7 @@ class RuntimeParams:
     # DriveCommand, which in CSV is target-velocity-zero, i.e. the drives hold.
     # So the leg is stiff, not limp, and nothing MOVES. (Was `command_motors`,
     # which read as "do not command the motors" when we very much still do.)
-    allow_motion: bool = False
+    allow_motion: bool = True
     # Per-joint drive gate, applied at the wire in low_level.run(). False sends a
     # zero DriveCommand for that joint -- which in CSV is target velocity zero,
     # so the drive holds it rather than leaving it free. Everything upstream
@@ -92,8 +92,8 @@ class RuntimeParams:
     # Ankle off while its torque loop limit-cycles near 42 Hz.
     drive_knee: bool = True
     drive_ankle: bool = False
-    knee_torque_trip: float = 50.0      # de-energize + stop if |knee motor torque ff| exceeds [Nm]
-    ankle_torque_trip: float = 50.0     # same, ankle [Nm]
+    knee_torque_trip: float = 120.0      # de-energize + stop if |knee motor torque ff| exceeds [Nm]
+    ankle_torque_trip: float = 120.0     # same, ankle [Nm]
     enable_grace_s: float = 2.0         # warn if not OPERATION_ENABLED this long after enable [s]
     shutdown_s: float = 1.0             # disable-ramp duration on teardown [s]
     max_stale_ticks: int = 5            # B3 watchdog: stale command -> safe zero
@@ -569,7 +569,7 @@ MJSWING = MJSwingParams(
     swing_duration_max=1.0,
 
     knee_flex_angle=60.0 * pi / 180.0,
-    knee_extend_angle=5.0 * pi / 180.0,
+    knee_extend_angle=10.0 * pi / 180.0,
     knee_flex_frac=0.5,
     knee_angle_min_soft=5.0 * pi / 180.0,
     knee_angle_max_soft=85.0 * pi / 180.0,

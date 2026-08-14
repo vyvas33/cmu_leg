@@ -56,6 +56,13 @@ class RuntimeParams:
     max_arm_wait_s: float = 120.0
     hw_init_timeout: float = 5.0        # max wait for low-level EtherCAT init [s]
     cores: tuple[int, int] = (2, 3)     # CPU affinity (low-level, control); Linux only
+    # SCHED_FIFO priorities for the same two, applied by each child itself.
+    # Low-level outranks control: it holds the 1 kHz EtherCAT cycle, and a stall
+    # past the drives' sync-manager watchdog (measured between 2.5 and 2.8 ms)
+    # quick-stops them. Both sit below 99 so kernel threads landing on the core
+    # can still pre-empt. Needs root or CAP_SYS_NICE; without it the child warns
+    # and continues at default priority.
+    rt_priority: tuple[int, int] = (80, 70)
 
     # When ec.enable is commanded, measured from the SYNCED ORIGIN -- i.e. from
     # the moment control finishes its IMU bring-up and stamps start_time, NOT

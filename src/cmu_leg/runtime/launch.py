@@ -122,7 +122,8 @@ def main():
             name="LOWLEVEL", target=low_level.run,
             kwargs=dict(dt=DT_LOW, tmax=rt.tmax, buffer=b1, cmd_buf=b3,
                         stop_event=stop_event, start_time=start_time,
-                        init_evnt=init_evnt, run_dir=run_dir))
+                        init_evnt=init_evnt, run_dir=run_dir,
+                        core=rt.cores[0], rt_priority=rt.rt_priority[0]))
         low_p.start()
         procs.append(low_p)
 
@@ -136,17 +137,15 @@ def main():
             name="CONTROL", target=control.run,
             kwargs=dict(dt=DT_CONTROL, tmax=rt.tmax, buffer=b1, cmd_buf=b3,
                         stop_event=stop_event, start_time=start_time,
-                        run_dir=run_dir))
+                        run_dir=run_dir,
+                        core=rt.cores[1], rt_priority=rt.rt_priority[1]))
         ctrl_p.start()
         procs.append(ctrl_p)
 
-        # --- pin to cores (Linux; no-op on macOS) ----------------------------
-        if hasattr(os, "sched_setaffinity"):
-            for p, core in zip(procs, rt.cores):
-                try:
-                    os.sched_setaffinity(p.pid, {core})
-                except OSError as e:
-                    print(f"MAIN: could not set affinity for {p.name}: {e}")
+        # Affinity and SCHED_FIFO are set by each child in its own run(), not
+        # from here: sched_setscheduler acts on the calling process, and setting
+        # affinity after spawn left the child's first ticks on whatever core it
+        # happened to start on.
 
         # --- anchor the deadline to the control-stamped origin ----------------
         # Control stamps `start_time` only after its IMU init (~seconds), which

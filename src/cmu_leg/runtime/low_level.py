@@ -36,6 +36,7 @@ from cmu_leg.types.commands import TorqueDesired, DriveCommand, Mode
 from cmu_leg.runtime.buffer import StateBuffer, CommandBuffer
 from cmu_leg.runtime.guard import ExIntGuard
 from cmu_leg.utility.recorder import Recorder
+from cmu_leg.utility.rtutils import pin_to_core
 import cmu_leg.config.params as params
 
 # All runtime knobs now live in params.RuntimeParams (params.RUNTIME): warmup,
@@ -52,7 +53,7 @@ class LoopStats:  # <1>
 
 
 def run(dt, tmax, buffer, cmd_buf, stop_event, start_time,
-        init_evnt, run_dir, is_verbose=False):
+        init_evnt, run_dir, is_verbose=False, core=None, rt_priority=None):
     """Low-level child process entry point (the Process target).
 
     Args:
@@ -76,6 +77,11 @@ def run(dt, tmax, buffer, cmd_buf, stop_event, start_time,
         is_verbose (bool): Verbose prints.
     """
     pname = current_process().name
+    # Real-time scheduling, applied by the child itself: sched_setscheduler
+    # acts on the calling process, and doing it here removes the race with
+    # the first ticks that setting affinity from the parent after spawn left.
+    if core is not None:
+        pin_to_core(core, rt_priority if rt_priority is not None else 80)
     rt = params.RUNTIME           # all runtime knobs (warmup, trips, gate, watchdog)
 
     # completion_stage gates teardown so it only touches what actually came up.

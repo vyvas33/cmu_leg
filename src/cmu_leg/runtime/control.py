@@ -39,6 +39,7 @@ from cmu_leg.runtime.operator import TerminalOperator, TimedOperator
 from cmu_leg.runtime.buffer import StateBuffer, CommandBuffer
 from cmu_leg.runtime.guard import ExIntGuard
 from cmu_leg.utility.recorder import Recorder
+from cmu_leg.utility.rtutils import pin_to_core
 import cmu_leg.config.params as params
 
 # Standing is the resting request (see runtime.operator); the drives gate it
@@ -54,7 +55,7 @@ class LoopStats:
 
 
 def run(dt, tmax, buffer, cmd_buf, stop_event, start_time,
-        run_dir, is_verbose=False):
+        run_dir, is_verbose=False, core=None, rt_priority=None):
     """Control child process entry point (the Process target).
 
     Args:
@@ -77,6 +78,11 @@ def run(dt, tmax, buffer, cmd_buf, stop_event, start_time,
     No init_evnt here: nothing downstream is gated on control coming up.
     """
     pname = current_process().name
+    # Real-time scheduling, applied by the child itself: sched_setscheduler
+    # acts on the calling process, and doing it here removes the race with
+    # the first ticks that setting affinity from the parent after spawn left.
+    if core is not None:
+        pin_to_core(core, rt_priority if rt_priority is not None else 80)
     rt = params.RUNTIME           # runtime knobs
 
     completion_stage = 0

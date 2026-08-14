@@ -41,6 +41,8 @@ class ProprioceptiveEstimator:
         self._toe_grf_lp = Lowpass(cutoff_freq=10.0, sample_rate=COMMON.sample_rate, order=2)
         self._heel_grf_lp = Lowpass(cutoff_freq=10.0, sample_rate=COMMON.sample_rate, order=2)
 
+        self._grf_seeded = False
+
         # live zero for contact detection, tracked while unloaded
         self._toe_base = 0.0
         self._heel_base = 0.0
@@ -66,6 +68,18 @@ class ProprioceptiveEstimator:
     def _apply_hall_grfs(self, frame: RawEtherCATFrame, dt: float):
         toe = ENCODERS.hall_0_offset - frame.hall_0
         heel = ENCODERS.hall_1_offset - frame.hall_1
+
+        if not self._grf_seeded:
+            # Seed both filters from the first raw sample. Left at zero state
+            # they ramp to the true reading over tens of ms, and _apply_contact
+            # latches its live zero on the first tick of that ramp -- so the
+            # zero is captured as ~0 while the heel actually reads a couple of
+            # hundred counts unloaded. That puts the heel past its threshold,
+            # contact goes true, and the baseline update is gated on being
+            # unloaded, so it can never recover.
+            self._toe_grf_lp.reset(toe)
+            self._heel_grf_lp.reset(heel)
+            self._grf_seeded = True
 
         self.state.toe_grf = self._toe_grf_lp.compute(toe)
         self.state.heel_grf = self._heel_grf_lp.compute(heel)

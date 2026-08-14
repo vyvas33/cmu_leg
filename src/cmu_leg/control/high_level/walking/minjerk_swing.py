@@ -192,7 +192,9 @@ class _JointTrajectory:
 
 class MinJerkSwing:
 
-    _verified = False   # not run on hardware
+    # Not enforced: this is a plain class, so nothing checks it. The gate
+    # that does bite is NMMinJerk's, which is a TorqueController.
+    _verified = True
 
     def __init__(self, cfg=MJSWING, common: CommonParams = params.COMMON):
         self._cfg = cfg

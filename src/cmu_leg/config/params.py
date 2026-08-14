@@ -77,12 +77,33 @@ class RuntimeParams:
     # DriveCommand, which in CSV is target-velocity-zero, i.e. the drives hold.
     # So the leg is stiff, not limp, and nothing MOVES. (Was `command_motors`,
     # which read as "do not command the motors" when we very much still do.)
-    allow_motion: bool = True
+    allow_motion: bool = False
     knee_torque_trip: float = 50.0      # de-energize + stop if |knee motor torque ff| exceeds [Nm]
     ankle_torque_trip: float = 50.0     # same, ankle [Nm]
     enable_grace_s: float = 2.0         # warn if not OPERATION_ENABLED this long after enable [s]
     shutdown_s: float = 1.0             # disable-ramp duration on teardown [s]
     max_stale_ticks: int = 5            # B3 watchdog: stale command -> safe zero
+
+    # Scripted operator schedule, in seconds from the synced origin. The control
+    # process is spawned, and multiprocessing replaces a child's stdin with
+    # devnull, so TerminalOperator can never come up there and the schedule is
+    # the only way to drive a run.
+    #
+    # bench_walk_at must fall AFTER standing has actually begun, which is
+    # low_warmup_s + however long the CiA-402 enable walk takes + enable_dwell.
+    # Requesting walking earlier drops standing_toggle while the mode FSM is
+    # still in INITIALIZING, whose guard needs it true, and the run then sits
+    # there for good. Standing typically lands near 12.5 s; 18.0 leaves margin
+    # for a slow enable walk.
+    #
+    # bench_swing_at is the scripted stand-in for the space key, for a leg in a
+    # harness where the foot never loads and no toe-off is ever produced.
+    # Entering walking already fires one swing of its own, so the first entry
+    # here is spaced clear of it. tmax runs from the first actuating tick, so
+    # the last entry has to leave room for its own swing to finish.
+    bench_walk_at: float | None = 18.0
+    bench_swing_at: tuple[float, ...] = (20.0, 22.0, 24.0, 26.0, 28.0, 30.0)
+    bench_swing_duration: float = 0.6   # s, before the MJSWING clamp
 
 
 # Knee

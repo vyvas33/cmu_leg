@@ -107,9 +107,12 @@ def run(dt, tmax, buffer, cmd_buf, stop_event, start_time,
         # replay run wants, because it is the only deterministic one.
         operator = TerminalOperator()
         if not operator.available:
-            operator = TimedOperator()
-            print(f"[{pname}] operator: timed, standing requested from the "
-                  f"start; stands once the drives report enabled")
+            operator = TimedOperator(walk_at=rt.bench_walk_at,
+                                     swing_at=rt.bench_swing_at,
+                                     swing_duration=rt.bench_swing_duration)
+            print(f"[{pname}] operator: timed  walk@{rt.bench_walk_at}s  "
+                  f"swings@{list(rt.bench_swing_at)}s "
+                  f"({rt.bench_swing_duration}s each)")
         state = ProsthesisState()   # this process's OWN local bus
 
         # tmax counts from the first ACTUATING tick, not from t0, so warmup

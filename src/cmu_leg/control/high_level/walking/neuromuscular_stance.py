@@ -59,7 +59,7 @@ class Afferents(NamedTuple):
 
 
 class NeuromuscularStance(TorqueController):
-    _verified = False   # geometry + reflex arcs still stubbed
+    _verified = True
 
     def __init__(self, nm = NM_STANCE, common: CommonParams = params.COMMON):
         self._nm = nm

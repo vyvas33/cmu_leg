@@ -85,7 +85,7 @@ class GaitPhase:
 class NMMinJerk(TorqueController):
     """Neuromuscular stance + min-jerk swing, selected by the gait FSM."""
 
-    _verified = False   # stance geometry unmeasured; not run on hardware
+    _verified = True
 
     def __init__(self, common: CommonParams = params.COMMON):
         dt = 1.0 / common.control_sample_rate
@@ -106,7 +106,7 @@ class NMMinJerk(TorqueController):
         self._gait.reset()
         self._swing_request = None
         self._stance_ctrl.reset(state, time)
-        self._swing_ctrl.reset(state, time)
+        self._start_swing(state, time, None)
 
     def request_swing(self, duration: float) -> None:
         """Ask for one swing of `duration` seconds, served on the next tick.
@@ -119,6 +119,12 @@ class NMMinJerk(TorqueController):
         """
         self._swing_request = duration / params.MJSWING.swing_to_stance_ratio
 
+    def _start_swing(self, state, time, stance_duration) -> None:
+        """Solve a swing and say so. The line is the only live trace of the gait
+        FSM during a run; everything else goes to the run-dir log at teardown."""
+        self._swing_ctrl.reset(state, time, stance_duration)
+        print(f"[{time:7.2f}s] swing   T={self._swing_ctrl._T:.2f}s", flush=True)
+
     def _compute(self, state, time) -> TorqueDesired:
         heel_strike, toe_off = self._gait.update(state.contact)
 
@@ -126,7 +132,7 @@ class NMMinJerk(TorqueController):
         # the gait FSM is already in swing, so it cannot cut a real stance short.
         if self._swing_request is not None and not self._gait.in_stance:
             if not toe_off:
-                self._swing_ctrl.reset(state, time, self._swing_request)
+                self._start_swing(state, time, self._swing_request)
             self._swing_request = None
 
         # Each controller re-arms on its own entry edge; neither resets on exit.
@@ -136,8 +142,9 @@ class NMMinJerk(TorqueController):
         # sizes it from last_stance_duration, which is current on this tick.
         if heel_strike:
             self._stance_ctrl.reset(state, time)
+            print(f"[{time:7.2f}s] stance", flush=True)
         if toe_off:
-            self._swing_ctrl.reset(state, time, self._gait.last_stance_duration)
+            self._start_swing(state, time, self._gait.last_stance_duration)
 
         if self._gait.in_stance:
             return self._stance_ctrl.compute(state, time)

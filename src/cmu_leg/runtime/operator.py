@@ -81,13 +81,22 @@ class TimedOperator(OperatorSource):
         walk_at: drop standing_toggle at this time, arming standing -> walking
             (which still needs the leg unloaded). None = never walk.
         hold_at: raise hold_toggle at this time. None = never.
+        swing_at: times to request a swing. This is the scripted stand-in for
+            the space key, and it is what a spawned process has to use --
+            multiprocessing replaces a child's stdin with devnull, so
+            TerminalOperator can never come up there.
+        swing_duration: seconds asked for on each of those, before the clamp.
     """
 
     def __init__(self, stand_at: float = 0.0, walk_at: float | None = None,
-                 hold_at: float | None = None):
+                 hold_at: float | None = None,
+                 swing_at: tuple[float, ...] = (),
+                 swing_duration: float = 0.6):
         self._stand_at = stand_at
         self._walk_at = walk_at
         self._hold_at = hold_at
+        self._swing_at = tuple(sorted(swing_at))
+        self._swing_duration = swing_duration
         self._seq = 0
 
     def read(self, t: float) -> OperatorInput:
@@ -96,7 +105,11 @@ class TimedOperator(OperatorSource):
         if self._walk_at is not None and t >= self._walk_at:
             standing = False
         hold = self._hold_at is not None and t >= self._hold_at
-        return OperatorInput(standing, hold, self._seq)
+        # Counting elapsed entries keeps swing_seq monotonic without carrying
+        # state, so a missed tick cannot lose a request.
+        swing_seq = sum(1 for s in self._swing_at if t >= s)
+        return OperatorInput(standing, hold, self._seq,
+                             swing_seq, self._swing_duration)
 
 
 class TerminalOperator(OperatorSource):

@@ -120,6 +120,10 @@ class ProsthesisControl:
                 self._walking.request_swing(op.swing_duration)
 
         if self.mode is not previous:
+            # WALKING is left silent on purpose: entering it immediately solves
+            # a swing, and that line already says where we are.
+            if self.mode is not Mode.WALKING:
+                print(f"[{time:7.2f}s] {self.mode.name}", flush=True)
             if self.mode is Mode.STANDING:
                 self._standing.reset(state, time)
             elif self.mode is Mode.WALKING:

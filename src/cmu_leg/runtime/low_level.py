@@ -7,11 +7,13 @@ state to the estimator (B1); reads the high-level command (B3) through a stalene
 watchdog, computes the low-level drive command via LowLevelControl, and writes it
 back with `ec.write` (one PDO exchange per tick, which also reads the next frame).
 
-BRING-UP SAFETY: `params.RUNTIME.command_motors` gates whether real torque is sent.
-With it False, the drives are still ENERGIZED after `low_warmup_s` (ec.enable rises,
-CiA-402 FSM walks to OPERATION_ENABLED) but the commanded torque is forced to zero
--- this validates the enable/write path with no motion. Set it True only when the
-leg is on a stand and you intend to command torque. All runtime knobs live in
+BRING-UP SAFETY: `params.RUNTIME.allow_motion` gates MOTION, not commanding. With
+it False the drives are still ENERGIZED after `low_warmup_s` (ec.enable rises,
+CiA-402 FSM walks to OPERATION_ENABLED), the mode FSM and the full low-level
+pipeline still run, and a ZERO DriveCommand is sent every tick -- which in CSV is
+target-velocity-zero, so the drives HOLD. This exercises the whole enable/write/
+control path with nothing moving; note the leg is stiff, not free. Set it True
+only when the leg is on a stand and you intend to move it. All runtime knobs live in
 params.RUNTIME (bound to `rt` in run()).
 
 Structured after hgeyer's hardware/devcom.py run(): a run() entry point spawned
@@ -30,14 +32,14 @@ from cmu_leg.hardware.ethercat_io import EtherCATInterface
 from cmu_leg.hardware.elmos.state_machine import drive_state
 from cmu_leg.estimation.proprioceptive_estimator import ProprioceptiveEstimator
 from cmu_leg.control.low_level_control import LowLevelControl
-from cmu_leg.types.commands import TorqueDesired, DriveCommand
+from cmu_leg.types.commands import TorqueDesired, DriveCommand, Mode
 from cmu_leg.runtime.buffer import StateBuffer, CommandBuffer
 from cmu_leg.runtime.guard import ExIntGuard
 from cmu_leg.utility.recorder import Recorder
 import cmu_leg.config.params as params
 
 # All runtime knobs now live in params.RuntimeParams (params.RUNTIME): warmup,
-# COMMAND_MOTORS gate, torque trips, disable-ramp + enable-grace timing, and the
+# allow_motion gate, torque trips, disable-ramp + enable-grace timing, and the
 # B3 staleness watchdog. Bound to `rt` at the top of run().
 
 
@@ -122,7 +124,13 @@ def run(dt, tmax, buffer, cmd_buf, stop_event, start_time,
         llc = LowLevelControl()
 
         # preallocate logs (memory-only append in the loop; disk write at teardown)
-        num_cycles = floor(tmax / dt) + 1
+        # tmax counts from the first ACTUATING tick, not from t0, so warmup
+        # does not eat the run. Both processes detect that moment independently
+        # -- control from its own FSM, low-level from the mode on the command it
+        # receives -- which differ by one IPC hop (sub-ms) and need no extra
+        # shared state. `max_arm_wait_s` bounds a run that never arms.
+        num_cycles = floor((rt.max_arm_wait_s + tmax) / dt) + 1
+        t_armed = None            # t of the first actuating tick
         state_log = Recorder("low_prosthesis_state")  # ProsthesisState each tick
         frame_log = Recorder("low_frame")     # raw EtherCAT frame each tick
         output_log = Recorder("low_output")   # LowLevelOutput (llo) -- the control output
@@ -174,6 +182,8 @@ def run(dt, tmax, buffer, cmd_buf, stop_event, start_time,
             # state is derived from the frame read back by the PREVIOUS exchange
             # (one-cycle sense->act latency, same as main.py's read-once pattern).
             state = proprio.update(frame, dt_meas)
+            # hardware fact -> control, which has no view of the master
+            state.control_enabled = ec.control_enabled()
 
             # publish the full proprioceptive state to the estimator (B1). hip_*
             # is still zero here (no ESKF in low-level); the estimator overlays it.
@@ -189,24 +199,35 @@ def run(dt, tmax, buffer, cmd_buf, stop_event, start_time,
             fresh = cmd is not None and stale_ticks < rt.max_stale_ticks   # <7>
 
             if fresh:
-                state.standing = cmd.standing
+                mode = cmd.mode
                 desired = TorqueDesired(cmd.knee_desired, cmd.ankle_desired)
             else:
-                state.standing = False           # watchdog tripped -> safe zero
+                mode = Mode.HOLD                 # watchdog tripped -> safe hold
                 desired = TorqueDesired()
+            # `standing` is now derived, not transported: knee conditioning
+            # suppresses the extension stop only in the standing policy.
+            state.standing = mode is Mode.STANDING
+
+            # Same run window as control, detected locally off the received
+            # mode -- one IPC hop later, which is sub-ms and irrelevant here.
+            if t_armed is None and mode.actuate:
+                t_armed = t
+            armed_expired = t_armed is not None and t - t_armed >= tmax
 
             llo = llc.compute(state, desired_torque=desired,
-                              control_enabled=ec.control_enabled(), dt=dt_meas)
-            # Real command only when COMMAND_MOTORS is set AND standing on a FRESH
-            # command; else zeros. COMMAND_MOTORS=False forces zeros for the enable-
-            # validation run. (The standing gate is a stopgap -- real stance/swing
-            # control should command torque regardless of standing.)
+                              control_enabled=ec.control_enabled(), dt=dt_meas,
+                              actuate=mode.actuate)
+            # Setpoints reach the drives only when motion is allowed AND the
+            # mode actuates AND the command is FRESH; otherwise a zero
+            # DriveCommand, which the drives hold on. `mode.actuate` is STANDING
+            # or WALKING -- this used to gate on `standing`, which silently
+            # meant walking could never move the motors.
             drive_cmd = (llc.to_drive_command(llo)
-                         if (rt.command_motors and fresh and state.standing) else DriveCommand())
+                         if (rt.allow_motion and fresh and mode.actuate) else DriveCommand())
 
             # Torque trip guard: gate on the controller's COMMANDED motor torque ff
             # (deterministic, watches what the controller WOULD drive even while
-            # COMMAND_MOTORS forces zeros). An over-limit command means something is
+            # allow_motion=False forces zeros). An over-limit command means something is
             # wrong -> command zero + disable this tick, then stop the whole run.
             if (abs(llo.knee_motor_torque_ff) > rt.knee_torque_trip
                     or abs(llo.ankle_motor_torque_ff) > rt.ankle_torque_trip):
@@ -253,6 +274,9 @@ def run(dt, tmax, buffer, cmd_buf, stop_event, start_time,
             drive_log.append(t, drive_cmd)
             timing_log.append(t, LoopStats(idle, dt_meas))
             sleep(idle) if idle >= 0.0 else sleep(0.0)   # <6>
+
+            if armed_expired:
+                break
 
             cycle += 1
     # (ExIntGuard runs terminate_gracefully on exit -- no finally needed)

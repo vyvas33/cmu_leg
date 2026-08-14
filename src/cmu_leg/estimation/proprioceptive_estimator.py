@@ -20,8 +20,8 @@ from cmu_leg.types.sensors import RawEtherCATFrame
 from cmu_leg.estimation.encoders import convert_encoders
 from cmu_leg.control.utils import BackwardDifference
 from cmu_leg.control.utils import MedianFilter
-from cmu_leg.control.utils import Lowpass
-from cmu_leg.config.params import ENCODERS, COMMON
+from cmu_leg.control.utils import Lowpass, clamp
+from cmu_leg.config.params import ENCODERS, COMMON, CONTACT
 
 
 class ProprioceptiveEstimator:
@@ -41,6 +41,11 @@ class ProprioceptiveEstimator:
         self._toe_grf_lp = Lowpass(cutoff_freq=10.0, sample_rate=COMMON.sample_rate, order=2)
         self._heel_grf_lp = Lowpass(cutoff_freq=10.0, sample_rate=COMMON.sample_rate, order=2)
 
+        # live zero for contact detection, tracked while unloaded
+        self._toe_base = 0.0
+        self._heel_base = 0.0
+        self._base_seeded = False
+
         self.state = ProsthesisState()
 
     def update(self, frame: RawEtherCATFrame, dt: float) -> ProsthesisState:
@@ -55,15 +60,47 @@ class ProprioceptiveEstimator:
             state (ProsthesisState): The same bus instance, fields updated.
         """
         self._apply_encoders(frame, dt)
-        self._apply_hall_grfs(frame)
+        self._apply_hall_grfs(frame, dt)
         return self.state
 
-    def _apply_hall_grfs(self, frame: RawEtherCATFrame):
+    def _apply_hall_grfs(self, frame: RawEtherCATFrame, dt: float):
         toe = ENCODERS.hall_0_offset - frame.hall_0
         heel = ENCODERS.hall_1_offset - frame.hall_1
 
         self.state.toe_grf = self._toe_grf_lp.compute(toe)
         self.state.heel_grf = self._heel_grf_lp.compute(heel)
+        self._apply_contact(dt)
+
+    def _apply_contact(self, dt: float):
+        """Loaded/unloaded against a live zero.
+
+        The halls drift between sessions, so a fixed offset goes stale. The
+        baseline (`Get Prosthesis State/ini SM`) averages each hall WHILE
+        UNLOADED and compares against that; this is the same idea as a
+        first-order filter. Gating the average on `not contact` is what stops a
+        step from dragging the zero up with it.
+
+        Threshold only -- no hysteresis or debounce. Those are gait-FSM
+        concerns and live in the walking controller, matching the baseline,
+        which thresholds here and de-chatters with its leg-angle guard in the
+        mode chart.
+        """
+        cfg = CONTACT
+        if not self._base_seeded:
+            # first tick: assume unloaded, which is how the leg starts
+            self._toe_base = self.state.toe_grf
+            self._heel_base = self.state.heel_grf
+            self._base_seeded = True
+
+        self.state.contact = (
+            abs(self.state.toe_grf - self._toe_base) > cfg.toe_threshold
+            or abs(self.state.heel_grf - self._heel_base) > cfg.heel_threshold
+        )
+
+        if not self.state.contact:
+            alpha = clamp(dt / max(cfg.baseline_tau, dt), 0.0, 1.0)
+            self._toe_base += alpha * (self.state.toe_grf - self._toe_base)
+            self._heel_base += alpha * (self.state.heel_grf - self._heel_base)
 
     def _apply_encoders(self, frame: RawEtherCATFrame, dt: float):
         enc_read = convert_encoders(frame=frame, ankle_median=self._ankle_median)

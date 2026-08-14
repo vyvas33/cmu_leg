@@ -3,7 +3,7 @@ files (sys_id_*, ankle_stiffness_params, spring_zero_positions, encoder_counts_
 to_rad_polys, ankle_angle_offset, dynamic_params).
 """
 from dataclasses import dataclass
-from math import pi
+from math import pi, acos
 
 
 # Common / shared
@@ -45,26 +45,65 @@ class CommonParams:
 # orchestration + safety knobs that used to live scattered across those files.
 @dataclass(frozen=True, slots=True)
 class RuntimeParams:
+    # Experiment duration, counted from the FIRST ACTUATING TICK -- the moment
+    # the mode FSM first reaches STANDING or WALKING -- not from the synced
+    # origin. Warmup no longer eats into the run, and with TerminalOperator the
+    # start is not predictable at all, so a fixed window from t0 would give an
+    # arbitrary amount of usable data depending on how long the operator took.
     tmax: float = 20.0                  # experiment duration [s]
+    # Ceiling on the wait for that first actuating tick. If the operator never
+    # asks (or the drives never enable), the run ends here instead of spinning.
+    max_arm_wait_s: float = 120.0
     hw_init_timeout: float = 5.0        # max wait for low-level EtherCAT init [s]
     cores: tuple[int, int] = (2, 3)     # CPU affinity (low-level, control); Linux only
 
-    # Two warmups on independent clocks. low_warmup_s energizes the drives
-    # (ec.enable); control_warmup_s starts standing (reset -> min-jerk clock).
-    # Torque only becomes deliverable ~actuation_warmup_margin_s after low_warmup_s
-    # (CiA-402 enable walk + startup mute), so control_warmup_s MUST exceed
-    # low_warmup_s + margin -- else the min-jerk ramps into a dead drive and the
-    # leg snaps to setpoint instead of gliding. launch.py asserts this.
-    low_warmup_s: float = 7.0
-    control_warmup_s: float = 10.0
-    actuation_warmup_margin_s: float = 2.25
+    # When ec.enable is commanded, measured from the SYNCED ORIGIN -- i.e. from
+    # the moment control finishes its IMU bring-up and stamps start_time, NOT
+    # from launch. Wall-clock is therefore (EtherCAT init + IMU init + this).
+    # It no longer has to clear anything on the control side: the mode FSM waits
+    # for state.control_enabled (the drives actually reaching OPERATION_ENABLED),
+    # so an enable walk that runs long delays standing instead of being ramped
+    # into. Logistic time for the operator to reach the e-stop is this plus
+    # control_warmup_s below -- both count from the same origin.
+    low_warmup_s: float = 10.0
+    # (control_warmup_s removed: standing is now the resting operator request,
+    # matching the baseline's standing_mode_toggle Constant of 1, so there is
+    # nothing left to schedule. The logistic wait is low_warmup_s above -- the
+    # drives energize, control_enabled arrives, standing begins.)
 
-    command_motors: bool = True         # False = energize but send ZERO torque (FSM-only bring-up)
+    # Bring-up gate on MOTION, not on commanding. False still energizes the
+    # drives, still walks CiA-402 to OPERATION_ENABLED, still runs the whole
+    # mode FSM and low-level pipeline -- it just substitutes a zero
+    # DriveCommand, which in CSV is target-velocity-zero, i.e. the drives hold.
+    # So the leg is stiff, not limp, and nothing MOVES. (Was `command_motors`,
+    # which read as "do not command the motors" when we very much still do.)
+    allow_motion: bool = False
     knee_torque_trip: float = 50.0      # de-energize + stop if |knee motor torque ff| exceeds [Nm]
     ankle_torque_trip: float = 50.0     # same, ankle [Nm]
     enable_grace_s: float = 2.0         # warn if not OPERATION_ENABLED this long after enable [s]
     shutdown_s: float = 1.0             # disable-ramp duration on teardown [s]
     max_stale_ticks: int = 5            # B3 watchdog: stale command -> safe zero
+
+    # Scripted operator schedule, in seconds from the synced origin. The control
+    # process is spawned, and multiprocessing replaces a child's stdin with
+    # devnull, so TerminalOperator can never come up there and the schedule is
+    # the only way to drive a run.
+    #
+    # bench_walk_at must fall AFTER standing has actually begun, which is
+    # low_warmup_s + however long the CiA-402 enable walk takes + enable_dwell.
+    # Requesting walking earlier drops standing_toggle while the mode FSM is
+    # still in INITIALIZING, whose guard needs it true, and the run then sits
+    # there for good. Standing typically lands near 12.5 s; 18.0 leaves margin
+    # for a slow enable walk.
+    #
+    # bench_swing_at is the scripted stand-in for the space key, for a leg in a
+    # harness where the foot never loads and no toe-off is ever produced.
+    # Entering walking already fires one swing of its own, so the first entry
+    # here is spaced clear of it. tmax runs from the first actuating tick, so
+    # the last entry has to leave room for its own swing to finish.
+    bench_walk_at: float | None = 18.0
+    bench_swing_at: tuple[float, ...] = (20.0, 22.0, 24.0, 26.0, 28.0, 30.0)
+    bench_swing_duration: float = 0.6   # s, before the MJSWING clamp
 
 
 # Knee
@@ -229,10 +268,15 @@ class ImpedanceStanceGains:
 @dataclass(frozen=True, slots=True)
 class ImpedanceParams:
     stance_12_threshold: float
-    stance_23_threshold: float 
+    stance_23_threshold: float
     stance1: ImpedanceStanceGains
     stance2: ImpedanceStanceGains
     stance3: ImpedanceStanceGains
+    # Damping floor the baseline applies to all six b terms on the way in
+    # (six Saturate blocks, [lim, inf], inside "Split up parameters"). The
+    # b values below are already clamped, so this is provenance for anyone
+    # reloading a different .mat -- ImpedanceStance must not re-apply it.
+    damping_lower_lim: float = 0.02
 
 
 
@@ -355,25 +399,225 @@ STANDING = StandingParams(
 #   tau = -k*(angle - off) - b*angle_dot   for knee and ankle.
 # Phase advance: Stance1 -> Stance2 when knee_angle > stance_12_threshold,
 #                Stance2 -> Stance3 when ankle_angle > stance_23_threshold.
-# Reference layout: impedance_control_basic/ParameterLibrary/impedance_control/
-#   optimized_gains_linear.mat (20-vector). k [Nm/rad], b [Nm/(rad/s), floor 0.02],
-#   off/thresholds [rad]. PLACEHOLDERS — tune before enabling.
+#
+# Source: impedance_control_basic/ParameterLibrary/impedance_control/
+#   optimized_gains_linear_v2.mat -- a 20-vector demuxed in the baseline's
+#   "Split up parameters" block. Index order verified against that demux
+#   (2026-08-10): 1-12 k/b interleaved per stance, 13-18 offsets, 19-20
+#   thresholds. v2 differs from optimized_gains_linear.mat only in
+#   stance_12_threshold (0.18 vs 0.3649); every other element is identical.
+#
+# Units: k [Nm/rad], b [Nm/(rad/s)], off and thresholds [rad].
+#
+# The three b values marked "clamped" were NEGATIVE in the .mat (optimizer
+# output). The baseline floors all six at damping_lower_lim on load, so the
+# joints never see them; the clamped values are stored here for the same
+# reason -- what is in this file is what runs.
 IMPEDANCE = ImpedanceParams(
-    stance_12_threshold=0.0,   # rad, on knee_angle
-    stance_23_threshold=0.0,   # rad, on ankle_angle
+    stance_12_threshold=0.18,   # rad, on knee_angle
+    stance_23_threshold=0.05,   # rad, on ankle_angle
     stance1=ImpedanceStanceGains(
-        knee_k=0.0,  knee_b=0.0,  knee_off=0.0,
-        ankle_k=0.0, ankle_b=0.0, ankle_off=0.0,
+        knee_k=1.6952926155327914,
+        knee_b=0.02,                      # clamped, .mat had -0.06311105716937081
+        knee_off=0.04927967674031565,
+        ankle_k=0.5813373023281654,
+        ankle_b=0.02,                     # clamped, .mat had 0.013185618610104564
+        ankle_off=-0.03604199280553995,
     ),
     stance2=ImpedanceStanceGains(
-        knee_k=0.0,  knee_b=0.0,  knee_off=0.0,
-        ankle_k=0.0, ankle_b=0.0, ankle_off=0.0,
+        knee_k=3.9978461205331,
+        knee_b=0.06374872137254088,
+        knee_off=0.20673632124501964,
+        ankle_k=-1.1461063551070416,      # negative stiffness; baseline floors b only, not k
+        ankle_b=0.02,                     # clamped, .mat had -0.10424569658391881
+        ankle_off=0.5561297042653888,
     ),
     stance3=ImpedanceStanceGains(
-        knee_k=0.0,  knee_b=0.0,  knee_off=0.0,
-        ankle_k=0.0, ankle_b=0.0, ankle_off=0.0,
+        knee_k=1.5746367312329719,
+        knee_b=0.10278330936260308,
+        knee_off=0.5390251724779882,
+        ankle_k=2.5386451061873583,
+        ankle_b=0.0509298768610955,
+        ankle_off=-0.16748997556074638,
     ),
 )
+
+# Gait phase detection (WalkingControl). Hall GRF proxies are conditioned in
+# ProprioceptiveEstimator; the threshold and the FSM live in the controller,
+# because `stance` never goes on the bus (see types/state.py).
+#
+# The baseline (`Get Prosthesis State/ini SM` + `SM`) auto-tares the halls by
+# averaging them WHILE UNLOADED and comparing against that live zero, which
+# absorbs hall drift between sessions. Thresholds are in hall-count units and
+# abs() is applied, so the sign of the hall wiring does not matter.
+@dataclass(frozen=True, slots=True)
+class ContactParams:
+    toe_threshold: float        # |toe_grf - baseline| above this = loaded
+    heel_threshold: float       # |heel_grf - baseline| above this = loaded
+    # Live-zero tracking: first-order average of the GRF while UNLOADED only.
+    # tau is in seconds; a long tau means the zero follows drift but not steps.
+    baseline_tau: float
+    # OURS, not the baseline's. The baseline de-chatters its FSM with a
+    # leg-angle guard (enter stance only if leg_angle < 85 deg), which needs
+    # the IMU. Until that exists, a refractory hold: once a phase is entered it
+    # cannot be left for this long. Chosen over a symmetric debounce because a
+    # debounce delays the heel-strike edge too, clipping stance duty; a hold
+    # only suppresses spurious re-triggers. On the Oct-2025 trial min_stance
+    # 0.30 s takes heel strikes from 16 (chatter) to 7 (correct) and agreement
+    # with the baseline stance flag from 0.940 to 0.965.
+    #
+    # CAUTION: 0.30 s is ~35% of the stance duration in that trial (0.85-1.47 s).
+    # At a markedly faster cadence it would start truncating real stances --
+    # revisit if walking speed goes up, and delete it once the leg-angle guard
+    # is available.
+    min_stance: float           # s, cannot leave stance before this
+    min_swing: float            # s, cannot leave swing before this
+
+
+CONTACT = ContactParams(
+    toe_threshold=70.0,
+    heel_threshold=80.0,
+    baseline_tau=2.0,
+    min_stance=0.30,
+    min_swing=0.0,      # measured no benefit; kept as a knob
+)
+
+
+# Min-jerk swing (MinJerkSwing). From `minjerk swing Control/Min Jerk Swing` in
+# nm_nn_swing; values from nm_nn.m section 2.5 and params.m. Read parameters from
+# those, not from minjerk_params.m in the same folder, which is an unused older
+# script holding different values.
+#
+# Per joint the trajectory is two quintics in swing-relative time, solved once at
+# toe-off from the measured toe-off state:
+#   segment 1  [0, flex_frac*T]  (theta_0, dtheta_0, ddtheta_0) -> (flex, 0, a_knot)
+#   segment 2  [flex_frac*T, T]  (flex, 0, a_knot)              -> (extend, 0, 0)
+# Past T a clamp holds it at (extend, 0, 0), which the segment-2 end constraints
+# already pin.
+#
+# The knee pins its knot acceleration to a cadence-scaled Winter value,
+# a_knot = winter_flex_knee_accel / (T / winter_swing_duration)**2, which leaves
+# both knee segments fully determined. The ankle constrains only continuity of
+# the knot acceleration, leaving one free degree of freedom that the jerk cost
+# resolves.
+@dataclass(frozen=True, slots=True)
+class MJSwingParams:
+    # Swing duration adapts to cadence off the PREVIOUS stance duration:
+    #   T = clamp(swing_to_stance_ratio * prev_stance_duration, min, max)
+    swing_to_stance_ratio: float
+    swing_duration_min: float                # s
+    swing_duration_max: float                # s
+
+    knee_flex_angle: float                   # rad, mid-swing flexion target
+    knee_extend_angle: float                 # rad, end-of-swing target
+    knee_flex_frac: float                    # knot time as a fraction of T
+    knee_angle_min_soft: float               # rad, IC guard
+    knee_angle_max_soft: float               # rad, IC guard
+
+    ankle_flex_angle: float                  # rad
+    ankle_extend_angle: float                # rad
+    ankle_flex_frac: float                   # earlier than the knee's, for clearance
+    ankle_angle_min_soft: float              # rad
+    ankle_angle_max_soft: float              # rad
+
+    # Knee knot acceleration, from Winter's Appendix A4 relative joint angular
+    # kinematics: the mean of the two samples straddling peak knee flexion, over a
+    # swing of winter_swing_duration. Time-scaled to T by the 1/t^2 law.
+    winter_swing_duration: float             # s
+    winter_flex_knee_accel: float            # rad/s^2 (negative: decelerating flexion)
+
+    # Trajectory tracking. Discrete pid on the error e = theta_traj - theta,
+    # forward Euler on both integrator and derivative filter, no output saturation
+    # and no anti-windup; the low-level torque conditioning bounds the command.
+    # Gains are absolute Nm/rad, since the baseline's stance/swing mixing scales
+    # only the stance branch by body weight.
+    #
+    # The d term acts on the error, not on the measured velocity as in
+    # StandingController. Swing theta_dot_traj peaks near 6.5 rad/s, where damping
+    # the measurement would brake the commanded flexion instead of correcting lag.
+    knee_kp: float                           # Nm/rad
+    knee_ki: float                           # Nm/(rad*s)
+    knee_kd: float                           # Nm/(rad/s)
+    ankle_kp: float
+    ankle_ki: float
+    ankle_kd: float
+    deriv_filter_n: float                    # rad/s, PID derivative filter (N)
+
+    # Pinned by the formulation, not a tuning knob: the knot is the flexion peak,
+    # so velocity there is zero by definition on both sides.
+    knee_flex_vel: float = 0.0
+    ankle_flex_vel: float = 0.0
+
+
+MJSWING = MJSwingParams(
+    swing_to_stance_ratio=0.6,
+    swing_duration_min=0.4,
+    swing_duration_max=1.0,
+
+    knee_flex_angle=60.0 * pi / 180.0,
+    knee_extend_angle=5.0 * pi / 180.0,
+    knee_flex_frac=0.5,
+    knee_angle_min_soft=5.0 * pi / 180.0,
+    knee_angle_max_soft=85.0 * pi / 180.0,
+
+    ankle_flex_angle=5.0 * pi / 180.0,
+    ankle_extend_angle=0.0,
+    ankle_flex_frac=0.3,
+    ankle_angle_min_soft=-20.0 * pi / 180.0,
+    ankle_angle_max_soft=20.0 * pi / 180.0,
+
+    winter_swing_duration=0.386,
+    winter_flex_knee_accel=-84.265,
+
+    knee_kp=30.0,
+    knee_ki=145.0,
+    knee_kd=12.5,
+    ankle_kp=125.0,
+    ankle_ki=125.0,
+    ankle_kd=10.0,
+    deriv_filter_n=100.0,
+)
+
+
+# Mode FSM (ProsthesisControl). Mirrors the baseline's
+# `Get Prosthesis State/State Machine`, minus the terms that need the IMU.
+#
+# Baseline guards, for reference:
+#   StandingMode -> Swing   [~contact && ~toggle && hip_velocity > 0
+#                            && leg_angle > 90 deg]
+#   Stance -> StandingMode  [toggle && |hip_velocity| < 0.1
+#                            && |leg_angle - pi/2| < 10 deg]
+#
+# Of those, only `~contact` is SAFETY-critical -- it is what guarantees walking
+# is entered unloaded, so the knee stop can never fire against a straight
+# standing knee. The hip_velocity / leg_angle terms are INTENT detection (is
+# the wearer actually trying to walk). Without the ESKF we keep the guarantee
+# and lose the intent, which means the operator has to be deliberate about when
+# they flip the toggle, but nothing unsafe can happen.
+@dataclass(frozen=True, slots=True)
+class ModeParams:
+    # "nearly still", the encoder-only stand-in for |hip_velocity| < 0.1.
+    # Joint velocities are all we have without the IMU.
+    still_joint_velocity: float     # rad/s, both joints must be under this
+    # How long the drives must hold OPERATION_ENABLED before a policy may run.
+    # Through this window the mode is still INITIALIZING, so mode.actuate is
+    # False and the drives receive real zero commands -- their internal loops
+    # settle on a zero-velocity target, and a bouncing enable shows up here
+    # instead of underneath a trajectory. Standing's min-jerk clock only starts
+    # afterwards, so the whole ramp is actually delivered.
+    enable_dwell: float             # s
+    # An operator source that stops updating for this long is treated as gone
+    # and the FSM drops to HOLD. Mirrors RuntimeParams.max_stale_ticks
+    # on the command buffer.
+    operator_timeout: float         # s
+
+
+MODE = ModeParams(
+    still_joint_velocity=0.15,
+    enable_dwell=2.0,
+    operator_timeout=0.25,
+)
+
 
 # dynamic_params.mat -> dynpars (9x1), for the high-level controller (not yet
 # ported). MATLAB order preserved; semantic mapping unconfirmed — label before use.
@@ -430,6 +674,10 @@ class ESKFConfig:
     # inflate Q's dtheta/dv terms with the measured integration error (change in
     # corrected acc/gyro between ticks) instead of white noise alone
     dynamic_process_noise: bool
+    # correct thigh ATTITUDE from the velocity loop closure (the +R_th@hat(u)
+    # Jacobian block the draft dropped). Off = baseline behavior (thigh pitch
+    # rides gyro integration only, drifts); on = pitch is observed during swing.
+    correct_thigh_attitude: bool
 
 
 ESKF_CFG = ESKFConfig(
@@ -437,10 +685,16 @@ ESKF_CFG = ESKFConfig(
     dt_min_factor=0.5,
     dt_max_factor=5.0,
     imu_stale_timeout=0.05,   # IMU streams ~200 Hz (5 ms); 50 ms = 10 missed
-    sigma_dtheta_thigh=0.01, sigma_gyr_thigh=0.001,
-    sigma_dv_thigh=1.0, sigma_acc_thigh=0.001,
-    sigma_dtheta_foot=0.01, sigma_gyr_foot=0.001,
-    sigma_dv_foot=1.0, sigma_acc_foot=0.001,
+    # White terms (dtheta, dv) and bias walks (gyr, acc) from Allan-deviation
+    # characterization of each HWT906 (10 min stationary, worst axis), scaled
+    # sigma = C * sqrt(f_loop) with f_loop = 500 Hz (ESKF prediction rate).
+    # dv is left INFLATED at the old 1.0 -- the ~0.021 Allan floor is the
+    # stationary sensor VRW only; a swinging leg needs velocity distrusted well
+    # above that. Tune dv on the replay harness, not from Allan.
+    sigma_dtheta_thigh=0.0018, sigma_gyr_thigh=0.00054,
+    sigma_dv_thigh=1.0, sigma_acc_thigh=0.011,
+    sigma_dtheta_foot=0.0027, sigma_gyr_foot=0.00049,
+    sigma_dv_foot=1.0, sigma_acc_foot=0.0045,
     sigma_enc=0.01,
     sigma_rate=0.1,
     sigma_model_pos=0.01,
@@ -450,6 +704,7 @@ ESKF_CFG = ESKFConfig(
     init_duration=1.0,
     comp_beta=5.0,
     dynamic_process_noise=False,
+    correct_thigh_attitude=True,
 )
 
 
@@ -510,5 +765,215 @@ LEG = LegGeometry(
     # Note this is OUR mount, established on our hardware -- it is not the
     # baseline's gamma (6 deg at the knee slot), which stays unused; the numeric
     # match is a coincidence of magnitude, not the same physical quantity.
-    thigh_imu_pitch=-6.0 * pi / 180.0,
+    thigh_imu_pitch=7.0 * pi / 180.0,  #was -6
 )
+
+@dataclass(frozen=True, slots=True)
+class Attachment:
+    """One muscle's attachment at one joint, from the human muscle geometry.
+
+    The moment arm falls from r_max at phi_max to r_min at phi_min:
+        r(phi)  = r_max * cos(a * (phi - phi_max))
+        dl(phi) = (rho*r_max/a) * [sin(a*(phi-phi_max)) - sin(a*(phi_ref-phi_max))]
+    with a = angle_scale. Note r is not d(dl)/d(phi): rho scales the length
+    change but not the moment arm. That asymmetry is in the source model
+    deliberately -- keep it. The sign of `a` does not matter (cos and
+    sin(ax)/a are both even in a).
+    """
+    r_max: float            # m, peak moment arm
+    r_min: float            # m, arm at phi_min
+    phi_max: float          # rad, joint angle of peak moment arm
+    phi_min: float          # rad, joint angle at which the arm has fallen to r_min
+    phi_ref: float          # rad, joint angle at which the MTU is at l_rest
+    rho: float              # MTU length-change scaling (pennation etc.)
+    sign: float             # +1 if the MTU lengthens with increasing phi
+    constant_arm: bool = False   # hip-style: r = r_max, dl linear in phi
+
+    @property
+    def angle_scale(self) -> float:
+        """`angle_scale_*` in nm_nn.m: acos(r_min/r_max)/(phi_min - phi_max)."""
+        return acos(self.r_min / self.r_max) / (self.phi_min - self.phi_max)
+
+
+@dataclass(frozen=True, slots=True)
+class MuscleParams:
+    name: str
+    # PER-KILOGRAM (N/kg). nm_nn.m writes these as e.g. 7400/80; the baseline
+    # multiplies stance torque by stance_body_weight in NM stance Control
+    # (Gain/Gain1), so keep the normalisation here and scale at the torque.
+    F_max: float                          # N/kg
+    l_opt: float                          # m, optimal CE length
+    l_slack: float                        # m, SE slack length
+    v_max: float                          # l_opt/s -- multiply by l_opt for m/s
+    eps_ref: float                        # SE reference strain; ankle plantarflexors differ
+    prestim: float                        # baseline stimulation, [] 
+    # joint name -> Attachment. Keys must match the joints the controller
+    # passes in ("knee", "ankle"); a missing joint means the muscle does not
+    # span it, so its moment arm there is zero.
+    attachments: dict = None
+
+
+@dataclass(frozen=True, slots=True)
+class NeuromuscularStanceParams:
+    # shared muscle constants (nm_nn.m section 2)
+    W: float           # CE force-length width
+    C_RESID: float     # remaining force at +/- width; the CE gain is log(C_RESID)
+    N: float           # eccentric force enhancement
+    K_HILL: float      # force-velocity shape factor
+    TAU: float         # excitation-contraction coupling, s
+    DT: float          # muscle integration substep, s
+
+    # neural transmission delays, s. A pathway property, not a muscle one --
+    # the reflex arcs below pick which one they read at.
+    LONG: float        # distal / ankle group
+    MEDIUM: float      # knee
+    SHORT: float       # hip
+
+    # stance reflex arcs (Muscle Stimulation/Stance Phase). Verified against
+    # the block diagram 2026-08-10:
+    #   stim_vas = prestim_vas + FGAIN_VAS*(F_vas(t-d)/F_max_vas)
+    #                          + clamp(LGAIN_VAS*(l_ce_vas(t-d)/l_opt_vas - LCEOFF_VAS), -1, 0)
+    #   stim_gas = prestim_gas + FGAIN_GAS*(F_gas(t-d)/F_max_gas)
+    #   stim_sol = prestim_sol + FGAIN_SOL*(F_sol(t-d)/F_max_sol)
+    # then all clamped to [STIM_MIN, STIM_MAX].
+    # VAS reads BOTH its afferents at SHORT (5 ms) in the baseline -- not
+    # MEDIUM, despite being a knee muscle. GAS and SOL read at LONG (20 ms).
+    FGAIN_VAS: float
+    LGAIN_VAS: float
+    LCEOFF_VAS: float  # l_opt units
+    FGAIN_GAS: float
+    FGAIN_SOL: float
+    DELAY_VAS: float   # s
+    DELAY_GAS: float
+    DELAY_SOL: float
+    STIM_MIN: float
+    STIM_MAX: float
+
+    # Late-stance VAS suppression (Stimulation Mixing Prosthesis). Once the
+    # thigh passes behind LATE_STANCE_HIP and GAS force falls off its peak for
+    # this stance, VAS stim is scaled by (F_gas/max F_gas)^VAS_SUPPRESS_EXP,
+    # clamped to [0,1]. This is the swing-initiation unlock: it lets the knee
+    # break into flexion. NEEDS HIP ANGLE, so it is gated off until the ESKF
+    # provides one -- see NeuromuscularStance.
+    LATE_STANCE_HIP: float     # rad
+    VAS_SUPPRESS_EXP: float
+
+    # Knee-only joint stop + damper, on the REAL leg angle/velocity. Verified
+    # against Muscle Models 2026-08-10:
+    #   damper = -KD_DAMPER*knee_vel                       if knee_vel < 0
+    #   stop   = (KP_STOP*(STOP_ANGLE - knee)
+    #             - KD_STOP*knee_vel)                      if knee < STOP_ANGLE
+    #                                                      and STOP_DELAY elapsed
+    # The stop is a buckling guard: it pushes the knee back toward flexion when
+    # it gets straighter than STOP_ANGLE. Both are per-kilogram like the muscle
+    # forces. The baseline sums them INSIDE Muscle Models, so they also pass
+    # through the human->leg Jacobian -- arguably wrong for a hardware stop, but
+    # we match it so the replay is comparable.
+    KD_DAMPER: float
+    KP_STOP: float
+    KD_STOP: float
+    STOP_ANGLE: float      # rad, knee angle below which the stop engages
+    STOP_DELAY: float      # s after stance entry before the stop arms
+
+    VAS: MuscleParams
+    GAS: MuscleParams
+    SOL: MuscleParams
+
+    @property
+    def EPS_BE(self) -> float:
+        """BE reference strain: the baseline block is literally `w/2`."""
+        return self.W / 2.0
+
+
+# Source: prosthesis_control_NPC/nm_nn.m (section 2) + the tuned 7-vector in
+# ParameterLibrary/nm_gains_new/nm_gains_1.mat, which overrides the three F_max
+# values: Gains = [fmax_vas, fmax_gas, fmax_sol, st_fgain_vas, st_lgain_vas,
+# st_fgain_gas, st_fgain_sol] = [92.5, 16.875, 37.5, 1.2, 10, 1.67, 1.25].
+#
+# Angles are the HUMAN anatomical convention the muscle tables are written in,
+# NOT hardware angles -- neuromuscular_stance converts at the boundary. The
+# leg->human kinematic remap is still open (see the module docstring).
+NM_STANCE = NeuromuscularStanceParams(
+    W=0.56,
+    C_RESID=0.05,
+    N=1.5,
+    K_HILL=5.0,
+    TAU=0.01,
+    DT=0.0002,
+
+    LONG=0.020,
+    MEDIUM=0.010,
+    SHORT=0.005,
+
+    FGAIN_VAS=1.2,
+    LGAIN_VAS=10.0,
+    LCEOFF_VAS=0.625,
+    FGAIN_GAS=1.67,     # nm_gains_1.mat; nm_nn.m literal is 1.6693
+    FGAIN_SOL=1.25,
+    DELAY_VAS=0.005,    # SHORT -- both VAS afferents, per the block diagram
+    DELAY_GAS=0.020,    # LONG
+    DELAY_SOL=0.020,    # LONG
+    STIM_MIN=0.01,
+    STIM_MAX=1.0,
+    LATE_STANCE_HIP=0.0,        # `late stance threshold VAS` constant
+    VAS_SUPPRESS_EXP=3.0,       # Fcn1 = u(1)^3
+
+    KD_DAMPER=0.2,
+    KP_STOP=7.0,
+    KD_STOP=0.1,
+    STOP_ANGLE=12.0*pi/180.0,   # Muscle Models/Constant1
+    STOP_DELAY=0.200,           # Delay block, NumDelays=200 at 1 kHz
+
+    VAS=MuscleParams(
+        name="VAS",
+        F_max=92.5,         # 7400/80
+        l_opt=0.08,
+        l_slack=0.23,
+        v_max=12.0,
+        eps_ref=0.04,
+        prestim=0.12,
+        attachments={
+            "knee": Attachment(r_max=0.06, r_min=0.04,
+                               phi_max=15.0*pi/180.0, phi_min=135.0*pi/180.0,
+                               phi_ref=60.0*pi/180.0, rho=0.6,
+                               sign=+1.0),      # knee extensor: lengthens with flexion
+        },
+    ),
+
+    GAS=MuscleParams(
+        name="GAS",
+        F_max=16.875,       # 1350/80
+        l_opt=0.05,
+        l_slack=0.40,
+        v_max=12.0,
+        eps_ref=0.09,       # eref_ankle_pf
+        prestim=0.01,
+        attachments={
+            "knee":  Attachment(r_max=0.05, r_min=0.02,
+                                phi_max=40.0*pi/180.0, phi_min=135.0*pi/180.0,
+                                phi_ref=15.0*pi/180.0, rho=0.7,
+                                sign=-1.0),     # knee flexor: shortens with flexion
+            "ankle": Attachment(r_max=0.03, r_min=0.02,
+                                phi_max=-10.0*pi/180.0, phi_min=-90.0*pi/180.0,
+                                phi_ref=10.0*pi/180.0, rho=0.7,
+                                sign=+1.0),     # plantarflexor: lengthens with dorsiflexion
+        },
+    ),
+
+    SOL=MuscleParams(
+        name="SOL",
+        F_max=37.5,         # nm_gains_1.mat; nm_nn.m literal is 2500/80 = 31.25
+        l_opt=0.04,
+        l_slack=0.26,
+        v_max=6.0,
+        eps_ref=0.09,       # eref_ankle_pf
+        prestim=0.01,
+        attachments={
+            "ankle": Attachment(r_max=0.06, r_min=0.02,
+                                phi_max=-10.0*pi/180.0, phi_min=-90.0*pi/180.0,
+                                phi_ref=0.0, rho=0.5,
+                                sign=+1.0),     # plantarflexor: lengthens with dorsiflexion
+        },
+    ),
+)
+

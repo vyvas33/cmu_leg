@@ -48,8 +48,21 @@ def load_base(mat_path=MAT):
                        struct_as_record=False)["scope_data"].base.data
 
 
-def replay(D):
-    """Drive our ESKF with the logged IMU + encoders. Returns dict of traces."""
+def replay(D, target_hz=500.0):
+    """Drive our ESKF with the logged IMU + encoders. Returns dict of traces.
+
+    The log is 1 kHz, but the ESKF runs at the control rate on hardware
+    (~500 Hz, runtime/control.py). Since the process noise is (sigma*dt)^2 --
+    rate-dependent -- the filter must be validated at the SAME dt it will
+    integrate with, or the sigmas tuned for 500 Hz inject the wrong Q here.
+    So decimate the log to target_hz. Walking is <~10 Hz and the baseline data
+    is already LPF'd (Nyquist 250 Hz after /2), so plain decimation won't alias.
+    """
+    t_full = D[:, COL["time"]]
+    native_hz = 1.0 / np.median(np.diff(t_full))
+    decim = max(1, round(native_hz / target_hz))
+    D = D[::decim]
+
     t = D[:, COL["time"]]
     N = len(t)
     # The baseline Read IMU block outputs are ALREADY in EKF/body frame (confirmed
@@ -65,14 +78,15 @@ def replay(D):
     fg = (R_BODY_SENSOR_FO.T @ D[:, COL["foot_gyro"]].T).T
     ka, aa = D[:, COL["knee_ang"]], D[:, COL["ankle_ang"]]
     kv, av = np.gradient(ka, t), np.gradient(aa, t)   # joint vels (logged deriv is spiky)
-    dt_arr = np.diff(t, prepend=t[0] - 0.001)
+    dt_nom = float(np.median(np.diff(t)))
+    dt_arr = np.diff(t, prepend=t[0] - dt_nom)
 
     eskf = ESKF()
     state = ProsthesisState()
     hip = np.full(N, np.nan)
     with np.errstate(invalid="ignore", divide="ignore"):  # ZUPT detector norm==0 at rest
         for k in range(N):
-            dt = dt_arr[k] if dt_arr[k] > 1e-5 else 0.001
+            dt = dt_arr[k] if dt_arr[k] > 1e-5 else dt_nom
             imu = IMUFrame(
                 thigh_acc=tuple(ta[k]), thigh_gyro=tuple(tg[k]),
                 foot_acc=tuple(fa[k]), foot_gyro=tuple(fg[k]),

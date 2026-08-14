@@ -29,7 +29,7 @@ from multiprocessing import Array
 from typing import NamedTuple
 
 from cmu_leg.types.state import ProsthesisState
-from cmu_leg.types.commands import TorqueDesired
+from cmu_leg.types.commands import TorqueDesired, Mode
 
 
 class _SharedRecord:
@@ -71,7 +71,13 @@ class _SharedRecord:
 
 _STATE_FIELDS = [f.name for f in dataclass_fields(ProsthesisState)]
 _STATE_N = len(_STATE_FIELDS)
-_STANDING_SLOT = _STATE_FIELDS.index("standing")   # the one bool -> float slot
+# Bools ride the 'd' array as 1.0/0.0 and have to be decoded back on read.
+# DERIVED, not hardcoded: this used to name `standing` explicitly, and both
+# `contact` and `control_enabled` were then added and came back as floats.
+# Truthiness happened to work, so nothing broke loudly -- exactly the kind of
+# thing that bites later. Adding a bool to ProsthesisState now just works.
+_BOOL_FIELDS = [n for n in _STATE_FIELDS
+                if isinstance(getattr(ProsthesisState(), n), bool)]
 
 
 class StampedState(NamedTuple):
@@ -97,8 +103,8 @@ class StateBuffer(_SharedRecord):
     sends it DOWN on B3), so it is inert on both B1 and B2. It rides along only
     because it is part of the dataclass.
 
-    The lone bool (`standing`) is stored as 1.0/0.0 in the 'd' array and decoded
-    back to bool on read.
+    Bool fields are stored as 1.0/0.0 in the 'd' array and decoded back to bool
+    on read; the set is derived from the dataclass, so it tracks new fields.
     """
 
     def __init__(self):
@@ -116,7 +122,8 @@ class StateBuffer(_SharedRecord):
             return None
         vals = snap[0:self._seq]
         kwargs = {name: vals[i] for i, name in enumerate(_STATE_FIELDS)}
-        kwargs["standing"] = bool(round(vals[_STANDING_SLOT]))
+        for name in _BOOL_FIELDS:
+            kwargs[name] = bool(round(kwargs[name]))
         return StampedState(ProsthesisState(**kwargs), seq)
 
 
@@ -125,20 +132,21 @@ class StateBuffer(_SharedRecord):
 # ====================================================================
 
 class HighLevelCommand(NamedTuple):
-    """One high-level command snapshot. `standing` is the mode flag the low-level
-    knee conditioning reads; `seq` drives the low-level staleness watchdog."""
+    """One high-level command snapshot. `mode` tells the low level whether to
+    actuate at all and whether to suppress the knee extension stop; `seq` drives
+    the low-level staleness watchdog."""
     knee_desired: float
     ankle_desired: float
-    standing: bool
+    mode: Mode
     seq: int
 
 
-_CMD_N = 3   # knee_desired, ankle_desired, standing (as float)
+_CMD_N = 3   # knee_desired, ankle_desired, mode (as float)
 
 
 class CommandBuffer(_SharedRecord):
     """High-level -> low-level channel. Desired joint torques + the standing mode
-    flag -- NOT a full state (high-level emits a command, and low-level already
+    -- NOT a full state (high-level emits a command, and low-level already
     holds the freshest physical state).
 
     SAFETY: the low-level process MUST watchdog `seq`. If it has not advanced in
@@ -149,9 +157,9 @@ class CommandBuffer(_SharedRecord):
     def __init__(self):
         super().__init__(_CMD_N)
 
-    def publish(self, torque: TorqueDesired, standing: bool) -> None:
+    def publish(self, torque: TorqueDesired, mode: Mode) -> None:
         """Writer (high-level)."""
-        self._publish((torque.knee_desired, torque.ankle_desired, float(standing)))
+        self._publish((torque.knee_desired, torque.ankle_desired, float(int(mode))))
 
     def latest(self) -> HighLevelCommand | None:
         """Reader (low-level). None until published once."""
@@ -159,5 +167,5 @@ class CommandBuffer(_SharedRecord):
         seq = int(snap[self._seq])
         if seq == 0:
             return None
-        knee, ankle, standing = snap[0:self._seq]
-        return HighLevelCommand(knee, ankle, bool(round(standing)), seq)
+        knee, ankle, mode = snap[0:self._seq]
+        return HighLevelCommand(knee, ankle, Mode(int(round(mode))), seq)

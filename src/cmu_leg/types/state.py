@@ -47,6 +47,11 @@ class ProsthesisState:
     #grf
     toe_grf: float = 0.0
     heel_grf: float = 0.0
+    # Loaded/unloaded, thresholded against a live zero by the proprioceptive
+    # estimator. This is a MEASUREMENT, which is why it lives here -- unlike
+    # `stance`, which is a control state and stays private to the walking
+    # controller. Both the mode FSM and the gait FSM read this one signal.
+    contact: bool = False
     grf_R: float = 0.0
     grf_L: float = 0.0
 
@@ -54,6 +59,13 @@ class ProsthesisState:
     leg_angle: float = 0.0
     leg_angle_velocity: float = 0.0
     leg_length: float = 0.0
+
+    # Drives confirmed in CiA-402 OPERATION_ENABLED. A hardware FACT written by
+    # the low-level process from ec.control_enabled(); the control process
+    # cannot see the EtherCAT master, so this is how it learns torque is
+    # actually deliverable. The mode FSM gates INITIALIZING -> STANDING on it,
+    # which is the baseline's `[control_enabled && standing_mode_toggle]`.
+    control_enabled: bool = False
 
     # mode fields — supervisor-owned (TBD who sets it), read by high-level
     # selection/edge and by knee conditioning.

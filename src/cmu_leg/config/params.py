@@ -585,7 +585,7 @@ MJSWING = MJSwingParams(
 
     knee_kp=30.0,
     knee_ki=145.0,
-    knee_kd=12.5,
+    knee_kd=6.5,
     ankle_kp=125.0,
     ankle_ki=125.0,
     ankle_kd=10.0,

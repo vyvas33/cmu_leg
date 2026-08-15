@@ -108,6 +108,18 @@ class NMMinJerk(TorqueController):
         self._stance_ctrl.reset(state, time)
         self._start_swing(state, time, None)
 
+    # Read-only views of the gait FSM, for the run log. `stance` stays a control
+    # state and does NOT go on the bus (see the note on ProsthesisState.contact);
+    # exposing it here lets the logger see the FSM output without the runtime
+    # reaching into `_gait`, and without another consumer being able to write it.
+    @property
+    def in_stance(self) -> bool:
+        return self._gait.in_stance
+
+    @property
+    def last_stance_duration(self) -> float | None:
+        return self._gait.last_stance_duration
+
     def request_swing(self, duration: float) -> None:
         """Ask for one swing of `duration` seconds, served on the next tick.
 

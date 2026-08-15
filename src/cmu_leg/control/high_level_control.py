@@ -105,6 +105,22 @@ class ProsthesisControl:
 
         return self.mode
 
+    # ------------------------------------------------------------ gait views
+
+    # The gait FSM lives inside the walking policy and its phase is a control
+    # state, not a measurement, so it never joins ProsthesisState. These are the
+    # read-only path the run log uses to record it. Both are only MEANINGFUL
+    # while mode is WALKING -- in any other mode the FSM is not being ticked and
+    # holds whatever it last saw, which is why the log records the mode beside
+    # them rather than these alone.
+    @property
+    def in_stance(self) -> bool:
+        return self._walking.in_stance
+
+    @property
+    def last_stance_duration(self) -> float | None:
+        return self._walking.last_stance_duration
+
     # --------------------------------------------------------------- compute
 
     def compute(self, state: ProsthesisState, time: float,

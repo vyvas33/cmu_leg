@@ -25,7 +25,7 @@ becomes nonzero), so it stamps directly after IMU init.
 
 import gc
 from dataclasses import dataclass
-from math import floor
+from math import floor, nan
 from time import perf_counter, sleep
 from multiprocessing import current_process
 
@@ -52,6 +52,30 @@ class LoopStats:
     Recorder logs dataclasses, so the two scalars need this wrapper."""
     idle: float
     dt: float
+
+
+@dataclass
+class GaitTrace:
+    """Per-tick trace of the gait FSM, logged beside its own input.
+
+    `contact` is the raw thresholded measurement off the bus and `in_stance` is
+    what the FSM made of it after ContactParams.min_stance / min_swing. Logging
+    them together is the point: the refractory hold is the only thing between
+    them, so a run where contact chatters but stance does not is the hold doing
+    its job, and one where both chatter means the threshold needs work. Before
+    this, only `contact` was recorded and the FSM output existed nowhere but the
+    terminal prints.
+
+    `mode` is here because in_stance is only meaningful while WALKING -- in any
+    other mode the FSM is not ticked and simply holds its last value.
+
+    `stance_duration` is the last COMPLETED stance (what sizes the next swing),
+    NaN until one finishes, so it reads as a gap rather than a fake zero.
+    """
+    mode: int
+    contact: bool
+    in_stance: bool
+    stance_duration: float
 
 
 def run(dt, tmax, buffer, cmd_buf, stop_event, start_time,
@@ -90,7 +114,7 @@ def run(dt, tmax, buffer, cmd_buf, stop_event, start_time,
     def terminate_gracefully():
         gc.enable()  # undo the RT gc freeze unconditionally
         if completion_stage >= 1:
-            for lg in (state_log, torque_log, timing_log):
+            for lg in (state_log, torque_log, timing_log, gait_log):
                 lg.save(run_dir)
             imu.close()
             # TerminalOperator puts the tty in cbreak; without this the shell is
@@ -131,6 +155,7 @@ def run(dt, tmax, buffer, cmd_buf, stop_event, start_time,
         state_log = Recorder("control_prosthesis_state")  # full ProsthesisState (incl. hip_*)
         torque_log = Recorder("control_torque")   # TorqueDesired each tick
         timing_log = Recorder("control_idle")     # LoopStats (idle margin + measured dt)
+        gait_log = Recorder("control_gait")       # GaitTrace (contact -> stance, + mode)
 
         completion_stage = 1
         # restore the terminal on the way out if we grabbed it
@@ -201,6 +226,13 @@ def run(dt, tmax, buffer, cmd_buf, stop_event, start_time,
             state_log.append(t, state)
             torque_log.append(t, desired)
             timing_log.append(t, LoopStats(idle, dt_meas))
+            gait_log.append(t, GaitTrace(
+                mode=int(pc.mode),
+                contact=state.contact,
+                in_stance=pc.in_stance,
+                stance_duration=(nan if pc.last_stance_duration is None
+                                 else pc.last_stance_duration),
+            ))
             sleep(idle) if idle >= 0.0 else sleep(0.0)
 
             if armed_expired:

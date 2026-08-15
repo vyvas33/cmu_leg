@@ -142,6 +142,23 @@ def _plot_lowlevel(d: dict, out: Path, prefix: str = "") -> None:
            "velocity [deg/s]", "ll_velocity_commanded.png")
 
 
+def _plot_gait(d: dict, out: Path, prefix: str = "") -> None:
+    # contact and in_stance are both 0/1, so plotted raw they sit on top of each
+    # other and the interesting part -- where they DISAGREE -- is invisible.
+    # Offsetting stance by a little separates the traces; the disagreement is
+    # exactly what min_stance/min_swing suppressed.
+    _panel(d, out, prefix, "Gait FSM: contact (measured) vs stance (FSM)",
+           {"contact": (None, "contact"),
+            "in_stance (+0.05)": (lambda v: v + 0.05, "in_stance"),
+            "mode/4": (lambda v: v / 4.0, "mode")},
+           "flag", "gait_contact_vs_stance.png")
+    # Stance duration is what sizes the next swing, so a wrong one shows up as a
+    # wrong swing T. NaN until the first stance completes -> the line starts late.
+    _panel(d, out, prefix, "Last completed stance duration",
+           {"stance": (None, "stance_duration")},
+           "duration [s]", "gait_stance_duration.png")
+
+
 def _plot_drive(d: dict, out: Path, prefix: str = "") -> None:
     _panel(d, out, prefix, "Drive velocity commands",
            {"knee": (None, "knee_velocity_counts"), "ankle": (None, "ankle_velocity_counts")},
@@ -234,6 +251,7 @@ _PLOTTERS = [
     ("torque",   _plot_torque),
     ("drive",    _plot_drive),
     ("idle",     _plot_idle),
+    ("gait",     _plot_gait),
 ]
 
 

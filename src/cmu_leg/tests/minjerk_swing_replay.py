@@ -55,6 +55,7 @@ Run:  uv run python -m cmu_leg.tests.minjerk_swing_replay
 Writes minjerk_swing_replay.png next to this file.
 """
 from dataclasses import replace
+from math import radians
 from pathlib import Path
 
 import numpy as np
@@ -107,7 +108,20 @@ def replay(sig):
     """Drive MinJerkSwing over the trial, resetting on each toe-off edge."""
     # Run the pid at the log's rate, which is also the nominal period it seeds
     # _t_prev from.
-    ctrl = MinJerkSwing(common=replace(COMMON, control_sample_rate=LOG_RATE))
+    # Pin the trajectory targets and pid gains to the values the baseline log was
+    # generated with. MJSWING is tuned for the bench and has already moved away
+    # from them -- knee_extend_angle off KNEE.angle_min_soft to stop the parked
+    # leg chattering on the extension stop, knee_kd down for phase margin at
+    # 500 Hz -- and this has to keep comparing like with like, or a deliberate
+    # tuning change reads as a regression.
+    cfg = replace(MJSWING,
+                  knee_flex_angle=radians(60.0), knee_extend_angle=radians(5.0),
+                  ankle_flex_angle=radians(5.0), ankle_extend_angle=0.0,
+                  knee_kp=30.0, knee_ki=145.0, knee_kd=12.5,
+                  ankle_kp=125.0, ankle_ki=125.0, ankle_kd=10.0,
+                  deriv_filter_n=100.0)
+    ctrl = MinJerkSwing(cfg=cfg,
+                        common=replace(COMMON, control_sample_rate=LOG_RATE))
     ctrl._verified = True
 
     # Velocity and acceleration are filtered before they become trajectory
@@ -147,9 +161,8 @@ def replay(sig):
             stance_dur = sig["t_toeoff"][j] - sig["t_heelstrike"][j]
             ctrl.reset(st, t, prev_stance_duration=stance_dur)
             events.append((t, ctrl._T,
-                           clamp(MJSWING.swing_to_stance_ratio * stance_dur,
-                                 MJSWING.swing_duration_min,
-                                 MJSWING.swing_duration_max),
+                           clamp(cfg.swing_to_stance_ratio * stance_dur,
+                                 cfg.swing_duration_min, cfg.swing_duration_max),
                            sig["knee_ang"][i] - sig["toeoff_knee"][j]))
 
         if ctrl.t0 is not None and swing[i]:

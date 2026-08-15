@@ -51,14 +51,9 @@ def pin_to_core(cpu_core: int, rt_priority: int = 80) -> bool:
               f"running at default priority -- expect scheduler overruns")
         print(f"          euid={os.geteuid()}  rlimit_rtprio={_rtprio_limit()}")
         if os.geteuid() != 0:
-            print("          not root: re-run under sudo, and check that sudo "
-                  "reaches the child (uv/venv wrappers can drop it)")
+            print("          not root: re-run under sudo")
         else:
-            print("          root but still refused, so it is the cgroup, not "
-                  "the user: with CONFIG_RT_GROUP_SCHED=y systemd gives the "
-                  "session cgroup zero rt bandwidth. Check "
-                  "`zcat /proc/config.gz | grep RT_GROUP_SCHED` and run under "
-                  "`systemd-run --scope`.")
+            print("          root but still refused")
         return False
 
     print(f"RT setup: core {cpu_core}, SCHED_FIFO priority {rt_priority}")

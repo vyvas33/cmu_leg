@@ -84,13 +84,13 @@ class RuntimeParams:
     # DriveCommand, which in CSV is target-velocity-zero, i.e. the drives hold.
     # So the leg is stiff, not limp, and nothing MOVES. (Was `command_motors`,
     # which read as "do not command the motors" when we very much still do.)
-    allow_motion: bool = True
+    allow_motion: bool = False
     # Per-joint drive gate, applied at the wire in low_level.run(). False sends a
     # zero DriveCommand for that joint -- which in CSV is target velocity zero,
     # so the drive holds it rather than leaving it free. Everything upstream
     # still runs and still logs, so the joint's commanded torque stays visible.
     # Ankle off while its torque loop limit-cycles near 42 Hz.
-    drive_knee: bool = True
+    drive_knee: bool = False
     drive_ankle: bool = False
     knee_torque_trip: float = 120.0      # de-energize + stop if |knee motor torque ff| exceeds [Nm]
     ankle_torque_trip: float = 120.0     # same, ankle [Nm]
@@ -117,7 +117,7 @@ class RuntimeParams:
     # the last entry has to leave room for its own swing to finish.
     bench_walk_at: float | None = 18.0
     bench_swing_at: tuple[float, ...] = (20.0, 22.0, 24.0, 26.0, 28.0, 30.0)
-    bench_swing_duration: float = 0.6   # s, before the MJSWING clamp
+    bench_swing_duration: float = 1.0   # s, before the MJSWING clamp
 
 
 # Knee

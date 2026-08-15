@@ -50,7 +50,7 @@ class RuntimeParams:
     # origin. Warmup no longer eats into the run, and with TerminalOperator the
     # start is not predictable at all, so a fixed window from t0 would give an
     # arbitrary amount of usable data depending on how long the operator took.
-    tmax: float = 20.0                  # experiment duration [s]
+    tmax: float = 60.0                  # experiment duration [s]
     # Ceiling on the wait for that first actuating tick. If the operator never
     # asks (or the drives never enable), the run ends here instead of spinning.
     max_arm_wait_s: float = 120.0
@@ -72,7 +72,7 @@ class RuntimeParams:
     # so an enable walk that runs long delays standing instead of being ramped
     # into. Logistic time for the operator to reach the e-stop is this plus
     # control_warmup_s below -- both count from the same origin.
-    low_warmup_s: float = 10.0
+    low_warmup_s: float = 5.0
     # (control_warmup_s removed: standing is now the resting operator request,
     # matching the baseline's standing_mode_toggle Constant of 1, so there is
     # nothing left to schedule. The logistic wait is low_warmup_s above -- the
@@ -116,7 +116,7 @@ class RuntimeParams:
     # here is spaced clear of it. tmax runs from the first actuating tick, so
     # the last entry has to leave room for its own swing to finish.
     bench_walk_at: float | None = 18.0
-    bench_swing_at: tuple[float, ...] = (20.0, 22.0, 24.0, 26.0, 28.0, 30.0)
+    bench_swing_at: tuple[float, ...] = (10.0, 12.0)
     bench_swing_duration: float = 1.0   # s, before the MJSWING clamp
 
 
@@ -493,7 +493,7 @@ CONTACT = ContactParams(
     heel_threshold=80.0,
     baseline_tau=2.0,
     min_stance=0.30,
-    min_swing=0.0,      # measured no benefit; kept as a knob
+    min_swing=0.12,      # measured no benefit; kept as a knob
 )
 
 

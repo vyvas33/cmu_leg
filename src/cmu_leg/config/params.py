@@ -116,7 +116,7 @@ class RuntimeParams:
     # here is spaced clear of it. tmax runs from the first actuating tick, so
     # the last entry has to leave room for its own swing to finish.
     bench_walk_at: float | None = 18.0
-    bench_swing_at: tuple[float, ...] = (10.0, 12.0)
+    bench_swing_at: tuple[float, ...] = ()      # () = no scripted swings
     bench_swing_duration: float = 1.0   # s, before the MJSWING clamp
 
 

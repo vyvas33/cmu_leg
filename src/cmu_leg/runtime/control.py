@@ -94,6 +94,7 @@ class LoopStats:
     t_eskf: float
     t_ctrl: float
     t_pub: float
+    t_tail: float
     t_log: float
     t_body: float
     cpu_body: float
@@ -279,7 +280,6 @@ def run(dt, tmax, buffer, cmd_buf, stop_event, start_time,
 
             cmd_buf.publish(desired, pc.mode)             # -> B3, down to low-level
             m5 = perf_counter()
-            cpu1 = _thread_cpu()
 
             # arm the run window on the first actuating tick, then end tmax
             # later. Checked after logging (below) so the last tick is recorded,
@@ -293,6 +293,16 @@ def run(dt, tmax, buffer, cmd_buf, stop_event, start_time,
             if stop_event.is_set():
                 return
 
+            # `t_tail` covers the arming checks and stop_event.is_set(). That
+            # last one is NOT a flag read: multiprocessing.Event.is_set()
+            # acquires its Condition, try-acquires the semaphore and releases
+            # it -- three semaphore ops per tick, on an RT thread. It sat
+            # outside every stage timer in the first version of this
+            # instrumentation, which is why the stage totals did not reconcile
+            # with the measured margin.
+            m6 = perf_counter()
+            cpu1 = _thread_cpu()
+
             clock += dt
             idle = clock - perf_counter()
             log0 = perf_counter()
@@ -301,8 +311,9 @@ def run(dt, tmax, buffer, cmd_buf, stop_event, start_time,
             timing_log.append(t, LoopStats(
                 idle, dt_meas,
                 t_imu=m1 - now, t_buf=m2 - m1, t_eskf=m3 - m2,
-                t_ctrl=m4 - m3, t_pub=m5 - m4, t_log=t_log_prev,
-                t_body=m5 - now, cpu_body=cpu1 - cpu0,
+                t_ctrl=m4 - m3, t_pub=m5 - m4, t_tail=m6 - m5,
+                t_log=t_log_prev,
+                t_body=m6 - now, cpu_body=cpu1 - cpu0,
             ))
             gait_log.append(t, GaitTrace(
                 mode=int(pc.mode),

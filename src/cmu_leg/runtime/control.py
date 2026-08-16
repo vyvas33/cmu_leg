@@ -24,6 +24,7 @@ becomes nonzero), so it stamps directly after IMU init.
 """
 
 import gc
+import time
 from dataclasses import dataclass
 from math import floor, nan
 from time import perf_counter, sleep
@@ -46,12 +47,56 @@ import cmu_leg.config.params as params
 # in run()). TODO: replace the time schedule with the real mode FSM / supervisor.
 
 
+# Per-thread CPU clock. `perf_counter` measures WALL time, which on a saturated
+# core conflates "this stage did work" with "this stage was descheduled or sat
+# waiting on the GIL". CLOCK_THREAD_CPUTIME_ID counts only cycles this thread
+# actually retired, so (wall - cpu) over the same span IS the stolen time. That
+# is the whole point of the instrumentation: the two candidate explanations for
+# the 500 Hz overrun -- an expensive ESKF vs. the two IMU parser threads
+# contending for this core -- are indistinguishable in wall time alone.
+try:
+    time.clock_gettime(time.CLOCK_THREAD_CPUTIME_ID)
+
+    def _thread_cpu() -> float:
+        return time.clock_gettime(time.CLOCK_THREAD_CPUTIME_ID)
+except (AttributeError, OSError):        # not Linux/macOS -- degrade, don't fail
+    def _thread_cpu() -> float:
+        return 0.0
+
+
 @dataclass
 class LoopStats:
     """Per-tick timing trace for the online idle-margin / loop-period plots.
-    Recorder logs dataclasses, so the two scalars need this wrapper."""
+    Recorder logs dataclasses, so the scalars need this wrapper.
+
+    `idle` / `dt` are the original two: scheduling margin and measured period.
+
+    The `t_*` fields are a per-stage WALL breakdown of the tick body, and
+    `cpu_body` is the control thread's own CPU time over that same body. They
+    answer different questions and are only useful together:
+
+        sum(t_*)            ~= t_body           (by construction)
+        t_body - cpu_body    = time STOLEN from this thread
+
+    A large `t_eskf` with `t_body ~= cpu_body` means the ESKF is genuinely
+    expensive and decimating or relocating it is the fix. A large `t_eskf` with
+    `t_body >> cpu_body` means the stage is not slow, it is being interrupted --
+    and the fix is the IMU stream rate / parser threads, not the filter.
+
+    `t_log` is the previous tick's logging cost, carried one tick forward: the
+    Recorder appends necessarily happen after this record is built, so a tick
+    cannot measure its own. Statistics over a run are unaffected by the shift.
+    """
     idle: float
     dt: float
+    t_imu: float
+    t_buf: float
+    t_eskf: float
+    t_ctrl: float
+    t_pub: float
+    t_log: float
+    t_body: float
+    cpu_body: float
 
 
 @dataclass
@@ -110,10 +155,25 @@ def run(dt, tmax, buffer, cmd_buf, stop_event, start_time,
     rt = params.RUNTIME           # runtime knobs
 
     completion_stage = 0
+    # Loop-entry baselines for the teardown CPU accounting (set just before the
+    # loop). Process CPU counts EVERY thread; thread CPU counts only this one.
+    # The difference over the run is what the two IMU parser threads burned --
+    # the one number that says whether this core is short on time because the
+    # control loop is expensive or because something else is eating it.
+    cpu_base = {"wall": 0.0, "proc": 0.0, "thread": 0.0}
 
     def terminate_gracefully():
         gc.enable()  # undo the RT gc freeze unconditionally
         if completion_stage >= 1:
+            if cpu_base["wall"]:
+                wall = perf_counter() - cpu_base["wall"]
+                proc = time.process_time() - cpu_base["proc"]
+                thrd = _thread_cpu() - cpu_base["thread"]
+                other = proc - thrd
+                print(f"[{pname}] CPU over {wall:.1f} s of loop: "
+                      f"control thread {thrd:.2f} s ({thrd/wall*100:.1f}% of a core), "
+                      f"other threads {other:.2f} s ({other/wall*100:.1f}%), "
+                      f"process total {proc/wall*100:.1f}%")
             for lg in (state_log, torque_log, timing_log, gait_log):
                 lg.save(run_dir)
             imu.close()
@@ -177,13 +237,19 @@ def run(dt, tmax, buffer, cmd_buf, stop_event, start_time,
         clock = t0
         t_prev = t0 - dt
         cycle = 0
+        t_log_prev = 0.0      # previous tick's logging cost; see LoopStats
+        cpu_base["wall"] = perf_counter()
+        cpu_base["proc"] = time.process_time()
+        cpu_base["thread"] = _thread_cpu()
         while cycle < num_cycles:
             now = perf_counter()
+            cpu0 = _thread_cpu()
             t = now - t0
             dt_meas = now - t_prev
             t_prev = now
 
             imu_frame = imu.read()
+            m1 = perf_counter()
 
             # adopt the full proprioceptive state off the buffer as this tick's
             # base, BEFORE the ESKF (its loop closures read joint velocities off
@@ -193,6 +259,7 @@ def run(dt, tmax, buffer, cmd_buf, stop_event, start_time,
             ms = buffer.latest()
             if ms is not None:
                 state = ms.state
+            m2 = perf_counter()
 
             # --- inline ESKF step (was ProsthesisStateEstimator._apply_eskf) ---
             # pass this loop's own clock t (shares the IMU timebase); dt_meas
@@ -200,6 +267,7 @@ def run(dt, tmax, buffer, cmd_buf, stop_event, start_time,
             eskf.update(imu_frame, state, t, dt_meas)
             if eskf.initialized:
                 state.hip_accel = hip_accel.compute(state.hip_velocity, dt_meas)
+            m3 = perf_counter()
 
             # --- mode FSM + high-level policy (co-located, no extra hop) -------
             # control OWNS the mode; the low level derives `actuate` and the
@@ -207,7 +275,11 @@ def run(dt, tmax, buffer, cmd_buf, stop_event, start_time,
             op = operator.read(t)
             desired = pc.compute(state, t, op, dt_meas)   # TorqueDesired
             state.standing = pc.mode is Mode.STANDING     # for logging/consumers
+            m4 = perf_counter()
+
             cmd_buf.publish(desired, pc.mode)             # -> B3, down to low-level
+            m5 = perf_counter()
+            cpu1 = _thread_cpu()
 
             # arm the run window on the first actuating tick, then end tmax
             # later. Checked after logging (below) so the last tick is recorded,
@@ -223,9 +295,15 @@ def run(dt, tmax, buffer, cmd_buf, stop_event, start_time,
 
             clock += dt
             idle = clock - perf_counter()
+            log0 = perf_counter()
             state_log.append(t, state)
             torque_log.append(t, desired)
-            timing_log.append(t, LoopStats(idle, dt_meas))
+            timing_log.append(t, LoopStats(
+                idle, dt_meas,
+                t_imu=m1 - now, t_buf=m2 - m1, t_eskf=m3 - m2,
+                t_ctrl=m4 - m3, t_pub=m5 - m4, t_log=t_log_prev,
+                t_body=m5 - now, cpu_body=cpu1 - cpu0,
+            ))
             gait_log.append(t, GaitTrace(
                 mode=int(pc.mode),
                 contact=state.contact,
@@ -233,6 +311,7 @@ def run(dt, tmax, buffer, cmd_buf, stop_event, start_time,
                 stance_duration=(nan if pc.last_stance_duration is None
                                  else pc.last_stance_duration),
             ))
+            t_log_prev = perf_counter() - log0
             sleep(idle) if idle >= 0.0 else sleep(0.0)
 
             if armed_expired:

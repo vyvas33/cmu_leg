@@ -37,7 +37,7 @@ Run:  uv run python -m cmu_leg.runtime.launch
 import os
 import json
 import subprocess
-from dataclasses import asdict
+from dataclasses import asdict, is_dataclass
 from multiprocessing import (Process, Event, Value,
                              set_start_method, freeze_support)
 from time import perf_counter
@@ -75,13 +75,24 @@ def _git_info():
 
 def _dump_config(run_dir):
     """Write config.json (git + the params this run used) into run_dir and echo a
-    one-line summary, so every run is self-documenting -- no hand notes needed."""
-    cfg = {
-        "git": _git_info(),
-        "runtime": asdict(params.RUNTIME),
-        "common": asdict(params.COMMON),
-        "standing": asdict(params.STANDING),
-    }
+    one-line summary, so every run is self-documenting -- no hand notes needed.
+
+    Every dataclass INSTANCE in config.params is discovered and dumped, rather
+    than a hand-listed subset. The list version silently omitted CONTACT and
+    MJSWING, so a run's log could not say which contact thresholds or swing
+    gains produced it -- and a session was lost re-deriving thresholds from the
+    logged `contact` column because of exactly that. Auto-discovery means a new
+    param group is captured without anyone remembering to come back here.
+
+    Keys are the lowercased instance name (RUNTIME -> "runtime"), which keeps the
+    three that already existed readable by anything parsing older runs. asdict
+    recurses, so nested groups (e.g. IMPEDANCE's per-stance gains) come along.
+    """
+    cfg = {"git": _git_info()}
+    for name, obj in vars(params).items():
+        # instances only -- is_dataclass is also true for the class objects
+        if is_dataclass(obj) and not isinstance(obj, type):
+            cfg[name.lower()] = asdict(obj)
     with open(os.path.join(run_dir, "config.json"), "w") as f:
         json.dump(cfg, f, indent=2, default=str)
     rt, g = params.RUNTIME, cfg["git"]

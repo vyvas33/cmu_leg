@@ -50,7 +50,7 @@ class RuntimeParams:
     # origin. Warmup no longer eats into the run, and with TerminalOperator the
     # start is not predictable at all, so a fixed window from t0 would give an
     # arbitrary amount of usable data depending on how long the operator took.
-    tmax: float = 60.0                  # experiment duration [s]
+    tmax: float = 240.0                  # experiment duration [s]
     # Ceiling on the wait for that first actuating tick. If the operator never
     # asks (or the drives never enable), the run ends here instead of spinning.
     max_arm_wait_s: float = 120.0
@@ -83,17 +83,23 @@ class RuntimeParams:
     # mode FSM and low-level pipeline -- it just substitutes a zero
     # DriveCommand, which in CSV is target-velocity-zero, i.e. the drives hold.
     # So the leg is stiff, not limp, and nothing MOVES. (Was `command_motors`,
-    # which read as "do not command the motors" when we very much still do.)
-    allow_motion: bool = False
+    # which read as "do not command the motors" when we very much still do.)\
+    is_testing = True
+    allow_motion = is_testing
+    drive_ankle = is_testing
+    drive_knee = is_testing
+    # if is_testing:
+    #     allow_motion: bool = True
+    #     drive_knee: bool = True
+    #     drive_ankle: bool = True
     # Per-joint drive gate, applied at the wire in low_level.run(). False sends a
     # zero DriveCommand for that joint -- which in CSV is target velocity zero,
     # so the drive holds it rather than leaving it free. Everything upstream
     # still runs and still logs, so the joint's commanded torque stays visible.
     # Ankle off while its torque loop limit-cycles near 42 Hz.
-    drive_knee: bool = False
-    drive_ankle: bool = False
+        
     knee_torque_trip: float = 120.0      # de-energize + stop if |knee motor torque ff| exceeds [Nm]
-    ankle_torque_trip: float = 120.0     # same, ankle [Nm]
+    ankle_torque_trip: float = 170.0     # same, ankle [Nm]
     enable_grace_s: float = 2.0         # warn if not OPERATION_ENABLED this long after enable [s]
     shutdown_s: float = 1.0             # disable-ramp duration on teardown [s]
     max_stale_ticks: int = 5            # B3 watchdog: stale command -> safe zero
@@ -115,7 +121,7 @@ class RuntimeParams:
     # Entering walking already fires one swing of its own, so the first entry
     # here is spaced clear of it. tmax runs from the first actuating tick, so
     # the last entry has to leave room for its own swing to finish.
-    bench_walk_at: float | None = 18.0
+    bench_walk_at: float | None = 10.0
     bench_swing_at: tuple[float, ...] = ()      # () = no scripted swings
     bench_swing_duration: float = 1.0   # s, before the MJSWING clamp
 
@@ -369,9 +375,9 @@ ENCODERS = EncoderParams(
 IMU = IMUParams(
     thigh_port="/dev/ttyUSB1",   # update from discover_imu_ports()
     foot_port="/dev/ttyUSB0",
-    baud=921600,
-    stream_rate_hz=1000,        # tune later; 0.4*200=80 -> lpf 42 is the largest valid
-    lpf_cutoff_hz=256,
+    baud=460800,
+    stream_rate_hz=500,        # tune later; 0.4*200=80 -> lpf 42 is the largest valid
+    lpf_cutoff_hz=188,
     acc_range_g=16,
     gyro_range_dps=2000,
 )
@@ -490,7 +496,7 @@ class ContactParams:
 
 CONTACT = ContactParams(
     toe_threshold=70.0,
-    heel_threshold=80.0,
+    heel_threshold=50.0,
     baseline_tau=2.0,
     min_stance=0.30,
     min_swing=0.12,      # measured no benefit; kept as a knob

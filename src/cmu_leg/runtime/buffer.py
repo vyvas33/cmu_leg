@@ -28,8 +28,8 @@ from dataclasses import fields as dataclass_fields
 from multiprocessing import Array
 from typing import NamedTuple
 
-from cmu_leg.types.state import ProsthesisState
-from cmu_leg.types.commands import TorqueDesired, Mode
+from cmu_leg.structures.state import ProsthesisState
+from cmu_leg.structures.commands import TorqueDesired, Mode
 
 
 class _SharedRecord:

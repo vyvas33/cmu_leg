@@ -7,8 +7,8 @@ one file so the per-stage verification/reset boundaries stay intact.
 import cmu_leg.config.params as params
 from cmu_leg.config.params import AnkleParams, CommonParams
 from cmu_leg.control.utils import Lowpass, BackwardDifference, clamp
-from cmu_leg.types.commands import TorqueDesired
-from cmu_leg.types.state import ProsthesisState
+from cmu_leg.structures.commands import TorqueDesired
+from cmu_leg.structures.state import ProsthesisState
 
 
 # This class takes in the state and the desired torque from high level controller, computes the commanded torque and sends it to ankle torque controller.

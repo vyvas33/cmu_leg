@@ -34,8 +34,8 @@ from cmu_leg.hardware.imu_io import IMUInterface
 from cmu_leg.estimation.eskf.eskf import ESKF
 from cmu_leg.control.high_level_control import ProsthesisControl
 from cmu_leg.control.utils import BackwardDifference
-from cmu_leg.types.state import ProsthesisState
-from cmu_leg.types.commands import Mode
+from cmu_leg.structures.state import ProsthesisState
+from cmu_leg.structures.commands import Mode
 from cmu_leg.runtime.operator import TerminalOperator, TimedOperator
 from cmu_leg.runtime.buffer import StateBuffer, CommandBuffer
 from cmu_leg.runtime.guard import ExIntGuard

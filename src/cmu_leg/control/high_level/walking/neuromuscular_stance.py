@@ -4,11 +4,12 @@ Neuromuscular Stance Control
 
 from cmu_leg.control.high_level.base_controller import TorqueController
 from cmu_leg.control.utils import clamp
+from cmu_leg.control.high_level.walking import retargeting
 import cmu_leg.config.params as params
 from cmu_leg.config.params import (CommonParams, NeuromuscularStanceParams,
                                    MuscleParams, NM_STANCE, LEG)
-from cmu_leg.types.state import ProsthesisState
-from cmu_leg.types.commands import TorqueDesired
+from cmu_leg.structures.state import ProsthesisState
+from cmu_leg.structures.commands import TorqueDesired
 import collections
 import math
 from typing import NamedTuple
@@ -38,9 +39,10 @@ import numpy as np
 # here -- only the kinematic remap. Ankle sign confirmed from the walking log:
 # the ankle reads positive through midstance (tibia over the foot) and drives
 # negative at toe-off (push-off plantarflexion).
-_L_THIGH = LEG.hip_to_knee          # 0.66 m
-_L_SHANK = LEG.shank_length         # 0.215 m
-_L_HUMAN = 0.5 * (_L_THIGH + _L_SHANK)   # symmetric virtual leg, 0.4375 m each
+# The knee half of the remap is shared with the NN swing predictor, which needs
+# the same virtual leg for the same reason -- see walking/retargeting.py.
+_L_THIGH, _L_SHANK, _L_HUMAN = (retargeting.L_THIGH, retargeting.L_SHANK,
+                                retargeting.L_HUMAN)
 
 # Torque map. The baseline applies M = d(human)/d(leg) directly to the torque
 # vector; power consistency wants M^T. They differ in which joint the cross
@@ -238,16 +240,12 @@ class NeuromuscularStance(TorqueController):
         Holds |hip->ankle| and (t2 - ankle) equal; see the module header.
         `t1`/`t2` are the triangle's interior angles at hip/ankle, t1+t2 = knee.
         """
-        lt, ls, lh = _L_THIGH, _L_SHANK, _L_HUMAN
+        ls = _L_SHANK
         if knee_angle == 0.0:
             return {"knee": 0.0, "ankle": ankle_angle}
 
-        # chord (hip->ankle) of the real leg. knee 0 = straight, so the
-        # interior angle at the knee is pi - knee and cos(pi-knee) = -cos(knee).
-        l3 = math.sqrt(lt*lt + ls*ls + 2.0*lt*ls*math.cos(knee_angle))
-        # invert the same law of cosines on the symmetric virtual leg
-        ck = (2.0*lh*lh - l3*l3) / (2.0*lh*lh)
-        knee_h = math.copysign(math.pi - math.acos(clamp(ck, -1.0, 1.0)), knee_angle)
+        l3 = retargeting.chord(knee_angle)      # hip->ankle on the real leg
+        knee_h = retargeting.knee_leg_to_human(knee_angle)
         # t1 sits at the HIP, so the side opposite it is the SHANK
         t1 = math.asin(clamp(ls*math.sin(knee_angle)/l3, -1.0, 1.0))
         # t2 - ankle preserved; virtual leg is isoceles so t2_h = knee_h/2

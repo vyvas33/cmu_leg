@@ -16,7 +16,7 @@ import serial.tools.list_ports
 
 from cmu_leg.config.params import IMU
 from cmu_leg.hardware.witmotion.hwt906 import WitMotionSensor, discover_baud
-from cmu_leg.types.sensors import IMUFrame
+from cmu_leg.structures.sensors import IMUFrame
 
 _CH340_VID = 6790  # CH340 / QinHeng USB-serial bridge (the chip hwt906 scans for)
 

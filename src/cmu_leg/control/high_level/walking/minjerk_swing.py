@@ -18,8 +18,8 @@ import numpy as np
 
 import cmu_leg.config.params as params
 from cmu_leg.config.params import MJSWING, CommonParams
-from cmu_leg.types.state import ProsthesisState
-from cmu_leg.types.commands import TorqueDesired
+from cmu_leg.structures.state import ProsthesisState
+from cmu_leg.structures.commands import TorqueDesired
 from cmu_leg.control.utils import clamp, PID
 
 

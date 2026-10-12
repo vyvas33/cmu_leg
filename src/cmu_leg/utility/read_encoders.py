@@ -18,7 +18,7 @@ import matplotlib.pyplot as plt
 
 from cmu_leg.estimation.state_estimator import ProsthesisStateEstimator
 from cmu_leg.hardware.ethercat_io import EtherCATInterface
-from cmu_leg.types.sensors import IMUFrame
+from cmu_leg.structures.sensors import IMUFrame
 from cmu_leg.utility.utils import make_run_dir
 from cmu_leg.utility.recorder import Recorder
 from cmu_leg.control.utils import Lowpass

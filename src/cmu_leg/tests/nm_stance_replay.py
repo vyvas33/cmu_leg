@@ -47,7 +47,7 @@ import matplotlib.pyplot as plt
 
 import cmu_leg.control.high_level.walking.neuromuscular_stance as nms
 from cmu_leg.control.high_level.walking.neuromuscular_stance import NeuromuscularStance
-from cmu_leg.types.state import ProsthesisState
+from cmu_leg.structures.state import ProsthesisState
 
 HERE = Path(__file__).parent
 MAT = HERE / "data" / "gaitData20251015_test7_NN_vicon.mat"

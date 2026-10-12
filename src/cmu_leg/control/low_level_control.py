@@ -23,8 +23,8 @@ from cmu_leg.control.low_level.ankle import (
     AnkleTorqueController,
     AnkleVelocitySaturation,
 )
-from cmu_leg.types.state import ProsthesisState
-from cmu_leg.types.commands import TorqueDesired, LowLevelOutput, DriveCommand
+from cmu_leg.structures.state import ProsthesisState
+from cmu_leg.structures.commands import TorqueDesired, LowLevelOutput, DriveCommand
 import cmu_leg.config.params as params 
 
 

@@ -13,9 +13,9 @@ byte-identical verification reference; the two runtime processes each drive one
 half directly.
 """
 
-from cmu_leg.types.state import ProsthesisState
-from cmu_leg.types.sensors import RawEtherCATFrame
-from cmu_leg.types.sensors import IMUFrame
+from cmu_leg.structures.state import ProsthesisState
+from cmu_leg.structures.sensors import RawEtherCATFrame
+from cmu_leg.structures.sensors import IMUFrame
 from cmu_leg.estimation.proprioceptive_estimator import ProprioceptiveEstimator
 from cmu_leg.control.utils import BackwardDifference
 from cmu_leg.estimation.eskf.eskf import ESKF

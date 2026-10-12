@@ -28,8 +28,8 @@ import scipy.io as sio
 
 from cmu_leg.control.high_level_control import ProsthesisControl
 from cmu_leg.runtime.operator import TerminalOperator, TimedOperator
-from cmu_leg.types.commands import Mode
-from cmu_leg.types.state import ProsthesisState
+from cmu_leg.structures.commands import Mode
+from cmu_leg.structures.state import ProsthesisState
 from cmu_leg.config.params import CONTACT, COMMON, MODE
 from cmu_leg.control.utils import clamp
 

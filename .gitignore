@@ -228,3 +228,6 @@ output/
 
 # macOS
 .DS_Store
+
+# mkdocs build output
+site/

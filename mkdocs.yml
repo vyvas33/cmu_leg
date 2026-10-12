@@ -1,0 +1,79 @@
+site_name: CMU Leg Control
+site_description: Python control stack for the CMU powered knee-ankle prosthesis
+repo_url: https://github.com/vyvas33/cmu_leg
+repo_name: vyvas33/cmu_leg
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  features:
+    - navigation.instant       # no full page reload between docs
+    - navigation.tracking      # URL follows the heading you are reading
+    - navigation.sections      # top-level nav rendered as headed groups
+    - navigation.top
+    - toc.follow
+    - content.code.copy
+    - content.action.edit      # "edit this page" -> GitHub, via edit_uri
+    - search.suggest
+    - search.highlight
+  palette:
+    # Respect the reader's OS theme, with a manual override either way.
+    - media: "(prefers-color-scheme)"
+      toggle: {icon: material/brightness-auto, name: Follow system}
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle: {icon: material/brightness-7, name: Dark mode}
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle: {icon: material/brightness-4, name: Light mode}
+
+markdown_extensions:
+  - admonition             # !!! warning / !!! danger boxes
+  - pymdownx.details       # collapsible versions of the above
+  - pymdownx.superfences:  # nested fences + mermaid diagrams
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+  - pymdownx.inlinehilite
+  - pymdownx.snippets      # embed files / fragments with --8<--
+  - pymdownx.keys          # ++ctrl+c++ renders as keycaps
+  - tables
+  - footnotes
+  - attr_list
+  - md_in_html
+  - toc:
+      permalink: true
+
+plugins:
+  - search
+
+# docs/ holds a few non-documentation files. They would otherwise be copied
+# verbatim into the built site (the XML alone is ~100 kB).
+exclude_docs: |
+  knee_ankle_prosthesis.xml
+  multi_process.py
+
+nav:
+  - Home: index.md
+  - Architecture: arch.md
+  - Hardware: hardware.md
+  # Uncomment each as it gets written -- see the outline in index.md.
+  # - Getting started: getting-started.md
+  # - Bring-up ladder:
+  #     - Overview: bringup/index.md
+  #     - 1. Read encoders: bringup/read-encoders.md
+  #     - 2. Zero encoders: bringup/zero-encoders.md
+  #     - 3. Zero torque: bringup/zero-torque.md
+  #     - 4. Standing: bringup/standing.md
+  #     - 5. Airborne swing: bringup/swing.md
+  #     - 6. Treadmill walking: bringup/walking.md
+  # - Control stack:
+  #     - Estimation: control/estimation.md
+  #     - High level: control/high-level.md
+  #     - Low level: control/low-level.md
+  # - Provenance: provenance.md
+  # - Challenges log: challenges.md

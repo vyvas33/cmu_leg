@@ -15,7 +15,7 @@ vkalva, June 2026
 """
 from typing import Protocol, TypeVar, runtime_checkable
 
-from cmu_leg.types.commands import DriveCommand
+from cmu_leg.structures.commands import DriveCommand
 
 # The per-interface frame type (RawEtherCATFrame, IMUFrame, ...). Covariant so a
 # SensorInterface[RawEtherCATFrame] is usable where SensorInterface[Frame] is

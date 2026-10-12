@@ -15,8 +15,8 @@ this full proprioceptive state to the estimator over B1 (a StateBuffer); the
 estimator overlays hip_* and republishes the complete state on B2.
 """
 
-from cmu_leg.types.state import ProsthesisState
-from cmu_leg.types.sensors import RawEtherCATFrame
+from cmu_leg.structures.state import ProsthesisState
+from cmu_leg.structures.sensors import RawEtherCATFrame
 from cmu_leg.estimation.encoders import convert_encoders
 from cmu_leg.control.utils import BackwardDifference
 from cmu_leg.control.utils import MedianFilter

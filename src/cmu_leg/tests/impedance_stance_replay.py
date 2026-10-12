@@ -57,7 +57,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from cmu_leg.control.high_level.walking.impedance_stance import ImpedanceStance
-from cmu_leg.types.state import ProsthesisState
+from cmu_leg.structures.state import ProsthesisState
 from cmu_leg.config.params import KNEE, ANKLE
 
 HERE = Path(__file__).parent

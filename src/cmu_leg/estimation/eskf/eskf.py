@@ -35,11 +35,11 @@ Author: vkalva
 """
 
 from cmu_leg.estimation.eskf.helpers import q_to_R, S, hat, norm, Euler_angles_collocating_vectors, quat_prod, R_to_Euler, angle_axis_to_q ,NominalState
-from cmu_leg.estimation.eskf.measurements import meas_pos_loop_closure, meas_vel_loop_closure, meas_zupt
+from cmu_leg.estimation.eskf.measurements import meas_pos_loop_closure, meas_vel_loop_closure, meas_zupt, P_SH_TH
 from cmu_leg.estimation.eskf.detectors import ZUPT_AdaptiveGLRT
 from cmu_leg.config.params import ESKFConfig, ESKF_CFG, LEG
-from cmu_leg.types.sensors import IMUFrame
-from cmu_leg.types.state import ProsthesisState
+from cmu_leg.structures.sensors import IMUFrame
+from cmu_leg.structures.state import ProsthesisState
 import numpy as np
 
 # Sensor -> body maps. The permutation parts are exact 90 deg axis swaps. The
@@ -73,6 +73,14 @@ TH_DV = 9     # thigh velocity   (vel loop closure)
 FO_DV = 24    # foot velocity    (zupt)
 
 _I3 = np.eye(3)   # read-only; scaled copies only, never mutated in place
+
+# Thigh IMU origin -> knee, and -> hip, in the thigh BODY frame. The filter
+# tracks the thigh IMU; both joints on that link are fixed offsets from it, so
+# neither needs the knee angle. +z runs knee -> hip along the link, the same
+# convention measurements.py uses for the shank ([0, 0, L_SHANK] is ankle ->
+# knee), which is why the hip term is +hip_to_knee.
+_P_TH_KNEE = -P_SH_TH
+_P_TH_HIP = _P_TH_KNEE + np.array([0.0, 0.0, LEG.hip_to_knee])
 
 
 class ESKF:
@@ -114,6 +122,14 @@ class ESKF:
         self.R_model_vel = np.eye(3) * cfg.sigma_model_vel ** 2
         self.sigma_zupt = cfg.sigma_zupt
 
+        # Treadmill: one positive scalar, two opposite-signed uses (see
+        # ESKFConfig.treadmill_speed). The belt carries the stance foot
+        # backward, so the "still foot" pseudo-measurement is negative; the
+        # published x adds the forward displacement back. Both are exactly zero
+        # overground, so there is one code path.
+        self._v_foot_nav = np.array([-cfg.treadmill_speed, 0.0, 0.0])
+        self._treadmill_x = 0.0
+
         self.init_duration = cfg.init_duration
         self.beta = cfg.comp_beta
         self.t_init = None
@@ -150,6 +166,11 @@ class ESKF:
         self.healthy = (t - imu.thigh_time <= self.cfg.imu_stale_timeout
                         and t - imu.foot_time <= self.cfg.imu_stale_timeout)
         self.t_prev = t
+
+        # integrated on the loop's dt rather than off t, so it cannot jump when
+        # the caller's clock does. Runs during init too: it is a pure clock, not
+        # an estimate, and the published x is gated on .initialized anyway.
+        self._treadmill_x += self.cfg.treadmill_speed * dt
 
         # first call: latch the init clock, seed both attitudes to identity
         if self.th.q is None or self.fo.q is None:
@@ -195,17 +216,39 @@ class ESKF:
 
         hip_accel is deliberately not written: it needs a differentiator, and
         ProsthesisStateEstimator already owns all of those.
+
+        hip/knee sagittal positions are fixed offsets from the thigh IMU along
+        the thigh link, so the knee angle never enters. Published as (x, z) in
+        the nav frame: +z up, +x the heading the filter happened to start with.
+        Yaw is unobservable here, so the absolute values carry no meaning on
+        their own -- only differences over a short window do, which is what the
+        NN predictor consumes. x additionally carries the integrated treadmill
+        displacement, so on a belt it advances as it would overground.
+
+        foot_stationary republishes the stationarity detector's decision, the
+        same one the zero-velocity update runs off. False until the filter is
+        initialized, since the detector only runs in _correct.
         """
         if not self.initialized:
             # leave the previous values on the bus rather than publishing an
             # unconverged attitude
             return
 
-        roll, pitch, _ = R_to_Euler(q_to_R(self.th.q))
+        R_th = q_to_R(self.th.q)
+        roll, pitch, _ = R_to_Euler(R_th)
         w_th = w_m_th - self.th.w_b            # bias-corrected, thigh body frame
 
         state.hip_angle = -pitch
         state.hip_velocity = -(np.cos(roll) * w_th[1] - np.sin(roll) * w_th[2])
+
+        state.foot_stationary = self._zupt_active
+
+        p_hip = self.th.p + R_th @ _P_TH_HIP
+        p_knee = self.th.p + R_th @ _P_TH_KNEE
+        state.hip_pos_x = p_hip[0] + self._treadmill_x
+        state.hip_pos_z = p_hip[2]
+        state.knee_pos_x = p_knee[0] + self._treadmill_x
+        state.knee_pos_z = p_knee[2]
 
     @staticmethod
     def _sensor_to_body(imu: IMUFrame):
@@ -294,7 +337,7 @@ class ESKF:
         if fo_fresh:
             self._zupt_active = self._zupt_fo.update(a_m_fo, w_m_fo)
         if self._zupt_active:
-            r, V = meas_zupt(self.fo, self.sigma_zupt)
+            r, V = meas_zupt(self.fo, self.sigma_zupt, self._v_foot_nav)
             self._kalman_update(r, FO_DV, V)
 
         # encoders tie the thigh to the foot: position, then velocity

@@ -128,19 +128,24 @@ def Ad_inv_gft(a, k):
 # Measurements. Each returns (r, V): r (3,), V (3,3). H is the implicit 3x3
 # identity selector at the block noted in each function; see eskf._kalman_update.
 # ---------------------------------------------------------------------------
-def meas_zupt(fo, sigma_zupt):
-    """Zero-velocity update on the foot. h(x) = v_fo, y = 0.
+def meas_zupt(fo, sigma_zupt, v_foot_nav):
+    """Foot velocity update. h(x) = v_fo, y = v_foot_nav.
 
     Only call when the stationarity detector reports the foot still (which is
     a subset of stance, not the same thing). This is the
     absolute anchor -- it corrects the foot directly (H on dv_fo), and pulls
     foot tilt + accel bias through P's cross-covariance.
 
+    "Still" means still relative to the ground the detector sees, which on a
+    treadmill is a moving belt: y is then the belt carrying the foot backward,
+    (-treadmill_speed, 0, 0), not zero. Overground v_foot_nav is zero and this
+    is the textbook zero-velocity update.
+
     Returns (r, V). H is the constant selector picking FO["dv"] (a 3x3 identity
     at cols 24:27); _kalman_update keys off the block start directly instead of
     forming the 3x30, so it is not returned. See FO_DV in eskf.py.
     """
-    r = -fo.v                       # y - h = 0 - v_fo
+    r = v_foot_nav - fo.v           # y - h
     V = (sigma_zupt ** 2) * np.eye(3)
     return r, V
 

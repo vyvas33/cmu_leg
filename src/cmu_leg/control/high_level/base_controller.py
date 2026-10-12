@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
-from cmu_leg.types.state import ProsthesisState
-from cmu_leg.types.commands import TorqueDesired
+from cmu_leg.structures.state import ProsthesisState
+from cmu_leg.structures.commands import TorqueDesired
 
 
 class TorqueController(ABC):

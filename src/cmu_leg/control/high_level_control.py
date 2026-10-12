@@ -6,7 +6,7 @@ Two levels of state machine, deliberately separated:
   MODE FSM   here. standing <-> walking <-> hold. Reads operator intent
              and `state.contact`, and owns which policy runs.
   GAIT FSM   inside NMMinJerk. stance <-> swing. Private -- `stance` is a
-             control state and never goes on the bus (see types/state.py).
+             control state and never goes on the bus (see structures/state.py).
 
 They share exactly one signal, in one direction: `state.contact`, which the
 proprioceptive estimator publishes as a measurement. Neither reaches into the
@@ -19,20 +19,25 @@ IMU. See ModeParams for which guards were dropped and why the safety-critical
 one was not.
 """
 
+from cmu_leg.control.high_level.base_controller import TorqueController
 from cmu_leg.control.high_level.standing import StandingController
 from cmu_leg.control.high_level.nm_minjerk import NMMinJerk
 import cmu_leg.config.params as params
 from cmu_leg.config.params import ModeParams
 from cmu_leg.runtime.operator import OperatorInput
-from cmu_leg.types.state import ProsthesisState
-from cmu_leg.types.commands import TorqueDesired, Mode
+from cmu_leg.structures.state import ProsthesisState
+from cmu_leg.structures.commands import TorqueDesired, Mode
 
 
 class ProsthesisControl:
-    def __init__(self, cfg: ModeParams = params.MODE):
+    def __init__(self, cfg: ModeParams = params.MODE,
+                 walking: TorqueController | None = None):
         self._cfg = cfg
         self._standing = StandingController()
-        self._walking = NMMinJerk()
+        # The walking policy is swappable so a bench run can put something
+        # else in that slot (see control/high_level/bench_nn_phases.py)
+        # without touching the mode FSM around it.
+        self._walking = walking if walking is not None else NMMinJerk()
 
         self.mode = Mode.INITIALIZING
         self._last_seq = -1

@@ -32,7 +32,7 @@ from cmu_leg.hardware.ethercat_io import EtherCATInterface
 from cmu_leg.hardware.elmos.state_machine import drive_state
 from cmu_leg.estimation.proprioceptive_estimator import ProprioceptiveEstimator
 from cmu_leg.control.low_level_control import LowLevelControl
-from cmu_leg.types.commands import TorqueDesired, DriveCommand, Mode
+from cmu_leg.structures.commands import TorqueDesired, DriveCommand, Mode
 from cmu_leg.runtime.buffer import StateBuffer, CommandBuffer
 from cmu_leg.runtime.guard import ExIntGuard
 from cmu_leg.utility.recorder import Recorder

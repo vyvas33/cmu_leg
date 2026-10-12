@@ -3,7 +3,7 @@
 Sits parallel to StandingController as a policy the orchestrator selects on the
 mode flag. Everything gait-phase lives in here and nothing about it goes on the
 bus -- `stance` is derived, used, and discarded within this class (see the note
-in types/state.py).
+in structures/state.py).
 
 Three things this owns:
   * the gait FSM (stance <-> swing) over the estimator's `contact`
@@ -20,8 +20,8 @@ from cmu_leg.control.high_level.walking.neuromuscular_stance import Neuromuscula
 from cmu_leg.control.high_level.walking.minjerk_swing import MinJerkSwing
 import cmu_leg.config.params as params
 from cmu_leg.config.params import CommonParams, ContactParams
-from cmu_leg.types.state import ProsthesisState
-from cmu_leg.types.commands import TorqueDesired
+from cmu_leg.structures.state import ProsthesisState
+from cmu_leg.structures.commands import TorqueDesired
 
 
 class GaitPhase:

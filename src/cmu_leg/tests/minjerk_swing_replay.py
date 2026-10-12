@@ -66,7 +66,7 @@ import matplotlib.pyplot as plt
 
 from cmu_leg.control.high_level.walking.minjerk_swing import MinJerkSwing
 from cmu_leg.control.utils import Lowpass, clamp
-from cmu_leg.types.state import ProsthesisState
+from cmu_leg.structures.state import ProsthesisState
 from cmu_leg.config.params import MJSWING, COMMON
 
 HERE = Path(__file__).parent

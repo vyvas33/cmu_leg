@@ -4,8 +4,8 @@ from cmu_leg.control.high_level.base_controller import TorqueController
 from cmu_leg.control.utils import Lowpass
 import cmu_leg.config.params as params
 from cmu_leg.config.params import StandingParams, CommonParams
-from cmu_leg.types.state import ProsthesisState
-from cmu_leg.types.commands import TorqueDesired
+from cmu_leg.structures.state import ProsthesisState
+from cmu_leg.structures.commands import TorqueDesired
 
 
 class StandingController(TorqueController):

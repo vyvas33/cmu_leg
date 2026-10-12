@@ -18,9 +18,9 @@ from cmu_leg.control.high_level_control import ProsthesisControl
 from cmu_leg.control.low_level_control import LowLevelControl
 
 # data types
-from cmu_leg.types.state import ProsthesisState
-from cmu_leg.types.sensors import IMUFrame   # standing is encoder-only; pass an empty frame
-from cmu_leg.types.commands import DriveCommand, Mode
+from cmu_leg.structures.state import ProsthesisState
+from cmu_leg.structures.sensors import IMUFrame   # standing is encoder-only; pass an empty frame
+from cmu_leg.structures.commands import DriveCommand, Mode
 from cmu_leg.runtime.operator import OperatorInput
 from cmu_leg.config.params import COMMON, STANDING
 

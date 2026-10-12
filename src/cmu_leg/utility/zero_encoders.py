@@ -24,7 +24,7 @@ from cmu_leg.control.utils import clamp
 from cmu_leg.estimation.encoders import _wrap_counts
 
 # data types
-from cmu_leg.types.commands import PositionCommand
+from cmu_leg.structures.commands import PositionCommand
 from cmu_leg.config.params import COMMON, ENCODERS, ENCODER_CORRECTION
 
 # logging output dir (post-loop dump)

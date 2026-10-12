@@ -27,8 +27,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from cmu_leg.types.sensors import IMUFrame
-from cmu_leg.types.state import ProsthesisState
+from cmu_leg.structures.sensors import IMUFrame
+from cmu_leg.structures.state import ProsthesisState
 from cmu_leg.estimation.eskf.eskf import ESKF, R_BODY_SENSOR_FO, _PERM_TH
 
 HERE = Path(__file__).parent

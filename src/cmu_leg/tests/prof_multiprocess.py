@@ -30,7 +30,7 @@ from cmu_leg.estimation.eskf.eskf import ESKF
 from cmu_leg.control.high_level_control import ProsthesisControl
 from cmu_leg.runtime.operator import OperatorInput
 from cmu_leg.control.low_level_control import LowLevelControl
-from cmu_leg.types.sensors import RawEtherCATFrame, IMUFrame
+from cmu_leg.structures.sensors import RawEtherCATFrame, IMUFrame
 from cmu_leg.runtime.buffer import StateBuffer, CommandBuffer
 
 N_WARM = 2000

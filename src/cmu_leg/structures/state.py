@@ -16,7 +16,18 @@ class ProsthesisState:
     hip_velocity: float = 0.0
     hip_accel: float = 0.0
 
-    #knee motor 
+    # Sagittal hip and knee positions [m], nav frame: +z up (gravity-aligned),
+    # +x the filter's initial heading. Both sit on the thigh link, so the ESKF
+    # gets them from the thigh IMU alone -- no knee angle involved. ESKF-owned,
+    # same caveat as the hip_* fields: valid only once .initialized.
+    # Absolute positions in a frame whose origin and heading are set by wherever
+    # the filter started, so only differences over a short window mean anything.
+    hip_pos_x: float = 0.0
+    hip_pos_z: float = 0.0
+    knee_pos_x: float = 0.0
+    knee_pos_z: float = 0.0
+
+    #knee motor
     knee_motor_angle: float = 0.0
     knee_motor_velocity: float = 0.0
     knee_motor_accel: float = 0.0
@@ -52,6 +63,12 @@ class ProsthesisState:
     # `stance`, which is a control state and stays private to the walking
     # controller. Both the mode FSM and the gait FSM read this one signal.
     contact: bool = False
+    # Foot held still by the ESKF's stationarity detector, which is a subset of
+    # stance rather than the same thing: it drops at heel-off, well before the
+    # foot leaves the ground. ESKF-owned, written every tick once it is
+    # running. The NN swing predictor arms on its falling edge, which is what
+    # buys a settled prediction before toe-off.
+    foot_stationary: bool = False
     grf_R: float = 0.0
     grf_L: float = 0.0
 

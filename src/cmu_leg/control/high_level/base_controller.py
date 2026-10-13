@@ -19,3 +19,20 @@ class TorqueController(ABC):
     @abstractmethod
     def reset(self, state, time) -> None:
         ...
+
+    # The rest of what ProsthesisControl asks of a policy. Defaulted rather
+    # than abstract: they serve the run log and the scripted operator, and a
+    # policy with no gait FSM has no answer to give. Overriding is how a
+    # policy that does opts in.
+    @property
+    def in_stance(self) -> bool:
+        """Whether the policy considers the foot loaded. Logging only."""
+        return False
+
+    @property
+    def last_stance_duration(self) -> float | None:
+        """Duration [s] of the last completed stance, None if there is none."""
+        return None
+
+    def request_swing(self, duration: float) -> None:
+        """Ask for one swing of `duration` [s]. Ignored where unsupported."""

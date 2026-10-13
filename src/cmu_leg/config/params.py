@@ -45,14 +45,17 @@ class RuntimeParams:
     low_warmup_s: float = 5.0           # s from the SYNCED ORIGIN to ec.enable
 
     # One switch for the two gates that let the leg move, so arming a bench run
-    # is a single edit. It is a dataclass field like the rest: dropping the
-    # annotation makes it a plain class attribute, which still READS correctly
-    # but leaves the gates out of fields() and so out of launch.py's asdict
-    # config dump -- the run record would not say whether the motors were live.
-    # Committed False. Flipping it is a deliberate act at the bench.
-    is_testing: bool = False
-    allow_motion: bool = is_testing     # gate on MOTION; False still enables + holds
-    drive_knee: bool = is_testing       # per-joint wire gate; False = drive holds
+    # is a single edit. Not `enable_drives`: the CiA-402 enable walk runs either
+    # way, and what these gate is MOTION. It is a dataclass field like the rest:
+    # dropping the annotation makes it a plain class attribute, which still
+    # READS correctly but leaves the gates out of fields() and so out of
+    # launch.py's asdict config dump -- the run record would not say whether the
+    # motors were live. Committed False; flipping it is a deliberate act at the
+    # bench. allow_motion False with drive_knee True is the dry run: nothing
+    # moves, but the torque trip still watches what the controller would drive.
+    arm_motion: bool = False
+    allow_motion: bool = arm_motion     # gate on MOTION; False still enables + holds
+    drive_knee: bool = arm_motion       # per-joint wire gate; False = drive holds
     drive_ankle: bool = False           # off while its torque loop rings near 42 Hz
     knee_torque_trip: float = 120.0      # de-energize + stop if |knee motor torque ff| exceeds [Nm]
     ankle_torque_trip: float = 120.0     # same, ankle [Nm]

@@ -81,6 +81,9 @@ class BenchNNPhases(TorqueController):
         self.knee_desired = 0.0
         self._vel = self._accel = 0.0
         self._t_prev = 0.0
+        self._in_stance = False
+        self._t_contact = None      # t the current contact began
+        self._last_stance = None    # duration [s] of the last completed one
 
     def reset(self, state: ProsthesisState, time: float) -> None:
         """Park on the current knee angle. Returns None."""
@@ -93,6 +96,17 @@ class BenchNNPhases(TorqueController):
         self._d_acc.reset(0.0)
         self._vel = self._accel = 0.0
         self._t_prev = time - self._dt
+        self._in_stance = state.contact
+        self._t_contact = time if state.contact else None
+        self._last_stance = None
+
+    @property
+    def in_stance(self) -> bool:
+        return self._in_stance
+
+    @property
+    def last_stance_duration(self) -> float | None:
+        return self._last_stance
 
     def _compute(self, state: ProsthesisState, time: float) -> TorqueDesired:
         cfg = self._cfg
@@ -100,6 +114,13 @@ class BenchNNPhases(TorqueController):
         self._t_prev = time
         hip = self._hip_lp.compute(state.hip_angle)
         hip_vel = self._hv_lp.compute(state.hip_velocity)
+
+        if state.contact != self._in_stance:
+            if state.contact:
+                self._t_contact = time
+            elif self._t_contact is not None:
+                self._last_stance = time - self._t_contact
+            self._in_stance = state.contact
 
         if state.contact:
             # Foot down: freeze the command where it is and let the pid hold

@@ -31,9 +31,10 @@ from cmu_leg.structures.commands import TorqueDesired, Mode
 
 class ProsthesisControl:
     def __init__(self, cfg: ModeParams = params.MODE,
-                 walking: TorqueController | None = None):
+                 walking: TorqueController | None = None,
+                 standing: TorqueController | None = None):
         self._cfg = cfg
-        self._standing = StandingController()
+        self._standing = standing if standing is not None else StandingController()
         # The walking policy is swappable so a bench run can put something
         # else in that slot (see control/high_level/bench_nn_phases.py)
         # without touching the mode FSM around it.

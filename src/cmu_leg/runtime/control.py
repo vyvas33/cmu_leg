@@ -33,6 +33,8 @@ from multiprocessing import current_process
 from cmu_leg.hardware.imu_io import IMUInterface
 from cmu_leg.estimation.eskf.eskf import ESKF
 from cmu_leg.control.high_level_control import ProsthesisControl
+from cmu_leg.control.high_level.bench_nn_phases import (BenchNNPhases,
+                                                        bench_standing)
 from cmu_leg.control.utils import BackwardDifference
 from cmu_leg.structures.state import ProsthesisState
 from cmu_leg.structures.commands import Mode
@@ -191,7 +193,10 @@ def run(dt, tmax, buffer, cmd_buf, stop_event, start_time,
         imu.connect()
         eskf = ESKF()
         hip_accel = BackwardDifference()
-        pc = ProsthesisControl()
+        # BENCH: phases 2 and 3 only, knee parked at BENCH_KNEE_TARGET between
+        # lifts. Revert to ProsthesisControl() for the real walking stack.
+        pc = ProsthesisControl(walking=BenchNNPhases(),
+                               standing=bench_standing())
         # Operator intent. TerminalOperator needs a tty; in the spawned control
         # process stdin usually is not one, so it reports .available and we fall
         # back to the scripted source -- which is also what any headless or

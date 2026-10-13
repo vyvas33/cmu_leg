@@ -105,32 +105,45 @@ class PID:
     responds to a moving setpoint. Damping the measurement instead brakes
     commanded motion; see StandingController for a case where that is wanted.
 
+    No anti-windup unless `i_limit` is given, matching the baseline.
+
     dt is required and clamped to [COMMON.dt_min, COMMON.dt_max], same reasoning
     as BackwardDifference: a stalled tick must not integrate as one big step.
     """
 
     def __init__(self, kp: float, ki: float, kd: float, n: float,
-                 dt_min: float = COMMON.dt_min, dt_max: float = COMMON.dt_max):
+                 dt_min: float = COMMON.dt_min, dt_max: float = COMMON.dt_max,
+                 i_limit: float | None = None):
         self._kp = kp
         self._ki = ki
         self._kd = kd
         self._n = n
         self._dt_min = dt_min
         self._dt_max = dt_max
+        # Bound on the integral term [same units as the output]. None keeps the
+        # baseline's behaviour, which has no anti-windup at all; set it where
+        # the controller can sit on a standing error, since the integral is
+        # otherwise unbounded.
+        self._i_limit = i_limit
         self._xi = 0.0
         self._xf = 0.0
 
-    def reset(self) -> None:
-        """Zero the integrator and filter states. Call on entry into the phase
-        this pid serves, so nothing carries across from the previous one."""
+    def reset(self, error: float = 0.0) -> None:
+        """Zero the integrator and seed the derivative filter from `error`
+        [same units as compute's], so the first compute after the reset
+        contributes no d term. Call on entry into the phase this pid serves,
+        so nothing carries across from the previous one. Returns None.
+        """
         self._xi = 0.0
-        self._xf = 0.0
+        self._xf = self._kd * error
 
     def compute(self, error: float, dt: float) -> float:
         dt = min(max(dt, self._dt_min), self._dt_max)
         d_out = self._n * (self._kd * error - self._xf)
         u = self._kp * error + self._xi + d_out
         self._xi += dt * self._ki * error
+        if self._i_limit is not None:
+            self._xi = min(max(self._xi, -self._i_limit), self._i_limit)
         self._xf += dt * d_out
         return u
 

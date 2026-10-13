@@ -36,7 +36,7 @@ class CommonParams:
 # Orchestration and safety knobs; loop periods derive from CommonParams.
 @dataclass(frozen=True, slots=True)
 class RuntimeParams:
-    tmax: float = 60.0                  # s, from the FIRST ACTUATING TICK, not t0
+    tmax: float = 240.0                 # s, from the FIRST ACTUATING TICK, not t0
     max_arm_wait_s: float = 120.0       # s, ceiling on waiting for that tick
     hw_init_timeout: float = 5.0        # max wait for low-level EtherCAT init [s]
     cores: tuple[int, int] = (2, 3)     # CPU affinity (low-level, control); Linux only
@@ -44,8 +44,15 @@ class RuntimeParams:
 
     low_warmup_s: float = 5.0           # s from the SYNCED ORIGIN to ec.enable
 
-    allow_motion: bool = False          # gate on MOTION; False still enables + holds
-    drive_knee: bool = False            # per-joint wire gate; False = drive holds
+    # One switch for the two gates that let the leg move, so arming a bench run
+    # is a single edit. It is a dataclass field like the rest: dropping the
+    # annotation makes it a plain class attribute, which still READS correctly
+    # but leaves the gates out of fields() and so out of launch.py's asdict
+    # config dump -- the run record would not say whether the motors were live.
+    # Committed False. Flipping it is a deliberate act at the bench.
+    is_testing: bool = False
+    allow_motion: bool = is_testing     # gate on MOTION; False still enables + holds
+    drive_knee: bool = is_testing       # per-joint wire gate; False = drive holds
     drive_ankle: bool = False           # off while its torque loop rings near 42 Hz
     knee_torque_trip: float = 120.0      # de-energize + stop if |knee motor torque ff| exceeds [Nm]
     ankle_torque_trip: float = 120.0     # same, ankle [Nm]
@@ -56,7 +63,7 @@ class RuntimeParams:
     # Scripted operator schedule [s from the synced origin]. The spawned control
     # process has no tty, so TerminalOperator cannot run there and this is the
     # only way to drive a run. bench_walk_at must fall after standing begins.
-    bench_walk_at: float | None = 18.0
+    bench_walk_at: float | None = 20.0
     bench_swing_at: tuple[float, ...] = ()      # () = no scripted swings
     bench_swing_duration: float = 1.0   # s, before the MJSWING clamp
 
@@ -159,7 +166,7 @@ class EncoderParams:
 class IMUParams:
     thigh_port: str            # set from discover_imu_ports()
     foot_port: str
-    baud: int                  # 921600 reliable on Linux
+    baud: int                  # 460800 is what the Jetson streams reliably
     stream_rate_hz: int        # sensor output rate
     lpf_cutoff_hz: int         # anti-alias; keep <= 0.4 * stream_rate
     acc_range_g: int           # +-g
@@ -297,9 +304,9 @@ ENCODERS = EncoderParams(
 IMU = IMUParams(
     thigh_port="/dev/ttyUSB1",   # update from discover_imu_ports()
     foot_port="/dev/ttyUSB0",
-    baud=921600,
-    stream_rate_hz=1000,
-    lpf_cutoff_hz=256,
+    baud=460800,
+    stream_rate_hz=500,
+    lpf_cutoff_hz=188,
     acc_range_g=16,
     gyro_range_dps=2000,
 )
@@ -385,7 +392,7 @@ class ContactParams:
 
 CONTACT = ContactParams(
     toe_threshold=70.0,
-    heel_threshold=80.0,
+    heel_threshold=50.0,
     baseline_tau=2.0,
     min_stance=0.30,
     min_swing=0.12,      # measured no benefit; kept as a knob

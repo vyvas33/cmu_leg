@@ -37,7 +37,7 @@ def main():
     print("Discovering sensor port and baudrate.")
     sensor = None
     try:
-        port = discover_port()
+        port = "/dev/ttyUSB0"
         baud = discover_baud(port)
         sensor = WitMotionSensor(port=port, baud_bps=baud)
     except (FileNotFoundError, ValueError, ConnectionError) as e:
@@ -68,7 +68,7 @@ def main():
         # Options: 9600, 115200, 230400, 460800, 921600 bps
         # NOTE: takes effect immediately; disconnect/reconnect required before saving.
         if ENABLE_CHANGE_BAUDRATE:
-            sensor.set_baudrate(460800)
+            sensor.set_baudrate(921600)
             sensor.disconnect()
             time.sleep(0.5)
             print("\nReconnecting ...\n")
@@ -86,7 +86,7 @@ def main():
 
         # Active output modalities (register 0x02)
         # Each flag enables the corresponding data packet in the stream.
-        sensor.set_outputs(ts=True, acc=True, gyro=True, ang=False, mag=True, quat=False)
+        sensor.set_outputs(ts=True, acc=True, gyro=True, ang=False, mag=False, quat=False)
 
         # Gyroscope full-scale range (register 0x20)
         # Options: 250, 500, 1000, 2000 dps
@@ -110,7 +110,7 @@ def main():
         # HG Note June 2026: I get data drops during motion if the sensor uses 9 axis.
         # Not sure if this is consistent for all HWT906 or just a faulty sensor.
         # Setting the algorithm to 6axis=True completely resolves this issue.
-        sensor.set_algorithm_axis(use_6axis=False)
+        sensor.set_algorithm_axis(use_6axis=True)
 
         # Attitude filter smoothing coefficient (register 0x25)
         # Range: 1 (low latency, more noise) to 10000 (very smooth, high latency). Default: 50.

@@ -1,7 +1,10 @@
-"""ESKF measurement models: each returns (r, V) for one sequential update.
+"""ESKF measurement models: each returns (r, V) for one sequential update
+(the velocity closure additionally returns a 3x3 thigh-attitude H block).
 
-Every H is a 3x3 identity selecting one error-state block, so it is not built or
+Most H are a 3x3 identity selecting one error-state block, so it is not built or
 returned -- eskf._kalman_update keys off the block start index (TH_DP/TH_DV/FO_DV).
+The velocity closure is the exception: its residual also depends on thigh
+attitude, so it returns that extra Jacobian block for _kalman_update's `extra`.
 
 DRAFT -- verify signs, the error-state layout, and the V constructions before
 trusting. Runtime path only: numpy, no sympy. The closed forms here are
@@ -125,19 +128,24 @@ def Ad_inv_gft(a, k):
 # Measurements. Each returns (r, V): r (3,), V (3,3). H is the implicit 3x3
 # identity selector at the block noted in each function; see eskf._kalman_update.
 # ---------------------------------------------------------------------------
-def meas_zupt(fo, sigma_zupt):
-    """Zero-velocity update on the foot. h(x) = v_fo, y = 0.
+def meas_zupt(fo, sigma_zupt, v_foot_nav):
+    """Foot velocity update. h(x) = v_fo, y = v_foot_nav.
 
     Only call when the stationarity detector reports the foot still (which is
     a subset of stance, not the same thing). This is the
     absolute anchor -- it corrects the foot directly (H on dv_fo), and pulls
     foot tilt + accel bias through P's cross-covariance.
 
+    "Still" means still relative to the ground the detector sees, which on a
+    treadmill is a moving belt: y is then the belt carrying the foot backward,
+    (-treadmill_speed, 0, 0), not zero. Overground v_foot_nav is zero and this
+    is the textbook zero-velocity update.
+
     Returns (r, V). H is the constant selector picking FO["dv"] (a 3x3 identity
     at cols 24:27); _kalman_update keys off the block start directly instead of
     forming the 3x30, so it is not returned. See FO_DV in eskf.py.
     """
-    r = -fo.v                       # y - h = 0 - v_fo
+    r = v_foot_nav - fo.v           # y - h
     V = (sigma_zupt ** 2) * np.eye(3)
     return r, V
 
@@ -242,4 +250,11 @@ def meas_vel_loop_closure(fo, th, enc, theta_dot_enc, foot_gyro, P,
 
     V_rate = J_lin @ R_rate @ J_lin.T
     V = V_foot + V_rate + R_model
-    return r, V
+
+    # Thigh-attitude Jacobian block for H (the term the cascade draft dropped).
+    # y = R_th @ V_b_nt[:3], and under the local/right error R_true=R_nom(I+hat)
+    # dh/d(dtheta_th) = +R_th @ hat(V_b_nt[:3]) in the same (+I on dv) sign family
+    # as this closure's velocity block. Numerically verified vs finite diff of y.
+    # Caller decides whether to use it (cfg.correct_thigh_attitude).
+    H_dth_th = R_th @ hat(V_b_nt[:3])
+    return r, V, H_dth_th

@@ -39,8 +39,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from cmu_leg.types.commands import DriveCommand
-from cmu_leg.types.sensors import RawEtherCATFrame
+from cmu_leg.structures.commands import DriveCommand
+from cmu_leg.structures.sensors import RawEtherCATFrame
 from cmu_leg.hardware.ethercat_io import EtherCATInterface
 from cmu_leg.hardware.elmos.state_machine import drive_state, DriveState
 from cmu_leg.utility.utils import make_run_dir

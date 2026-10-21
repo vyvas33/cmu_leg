@@ -71,3 +71,39 @@ def eskf_chain_residual(hip_angle: float, knee_angle: float,
     theirs = fk_p_fo_th(a, k)[[0, 2]]
 
     return float(np.abs(mine - theirs).max())
+
+
+HEEL_RADIUS = float(np.hypot(LEG.ankle_to_heel[0], LEG.ankle_to_heel[2]))
+HEEL_ANGLE = float(np.arctan2(-LEG.ankle_to_heel[0], -LEG.ankle_to_heel[2]))
+
+
+def heel_forward(hip_angle: float, knee_angle: float, hip_x: float,
+                 hip_to_knee: float = LEG.hip_to_knee,
+                 heel_radius: float = HEEL_RADIUS,
+                 heel_angle: float = HEEL_ANGLE) -> float:
+    """Horizontal position of the heel [m], in the hip's frame.
+
+    Args:
+        hip_angle, knee_angle: scalars [rad], ProsthesisState convention.
+        hip_x: hip's horizontal position [m], which the result is relative to.
+        hip_to_knee: thigh length [m]. Subject specific, so it is exposed
+            rather than always taken from LEG.
+        heel_radius, heel_angle: the heel's polar offset from the shank, [m]
+            and [rad]. Defaulted from LEG.ankle_to_heel, but exposed because
+            the baseline carries its own measured radius that does not equal
+            its own components' hypotenuse.
+
+    Returns:
+        scalar [m], +x forward.
+
+    The ankle angle is deliberately absent: this places the heel relative to the
+    shank, treating the foot as rigid with it. That is what the baseline's
+    `get_heel_forward_single` does, and the swing phase chart compares the
+    result against hip_x, so the two have to agree. `leg_points` is the full
+    chain and does use the ankle.
+    """
+    shank = knee_angle - hip_angle
+    return (hip_x
+            + hip_to_knee * np.sin(hip_angle)
+            - LEG.shank_length * np.sin(shank)
+            - heel_radius * np.sin(shank + heel_angle))

@@ -223,5 +223,11 @@ __marimo__/
 output/
 *_live.png
 
+#data for offline validation
+*.mat
+
 # macOS
 .DS_Store
+
+# mkdocs build output
+site/

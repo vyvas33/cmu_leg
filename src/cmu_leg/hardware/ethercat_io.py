@@ -11,8 +11,8 @@ vkalva, June 2026
 """
 import struct
 import pysoem
-from cmu_leg.types.sensors import RawEtherCATFrame
-from cmu_leg.types.commands import DriveCommand, PositionCommand
+from cmu_leg.structures.sensors import RawEtherCATFrame
+from cmu_leg.structures.commands import DriveCommand, PositionCommand
 from cmu_leg.hardware.elmos.state_machine import drive_state, DriveState, control_word
 
 KNEE, ANKLE, MEDULLA = 0, 1, 2 # slave indices on the EtherCAT Chain
@@ -105,7 +105,7 @@ class EtherCATInterface:
     def connect(self) -> None:
         try:
             self._bring_up()
-            print("Connected")
+            print("EtherCAT Connected")
         except Exception:
             self.master.close()
             raise

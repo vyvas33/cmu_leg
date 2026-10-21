@@ -13,7 +13,7 @@ try:
     sensor.connect()
     sensor.set_streaming_rate(50)
     sensor.set_lpf(20)  # ensure cutoff frequency <= 0.4 * stream_rate to avoid aliasing
-    sensor.set_outputs(ts=True, acc=True, gyro=True, ang=False, mag=False, quat=False)
+    sensor.set_outputs(ts=True, acc=True, gyro=True, ang=False, mag=True, quat=False)
 
     print(sensor.get_data_header())  # convenience function
 
@@ -27,7 +27,8 @@ try:
             last_ts = data["host_time_s"]
 
             a, g = data["acc"], data["gyro"]
-            print(f"{last_ts:.3f}s | [{a[0]:.3f}, {a[1]:.3f}, {a[2]:.3f}] m/s²")
+            m = data["mag"]
+            print(f"{last_ts:.3f}s | [{a[0]:.3f}, {a[1]:.3f}, {a[2]:.3f}] m/s^2 | [{m[0]:.3f}, {m[1]:.3f}, {m[2]:.3f}]")
 
         time.sleep(0.5 / sensor.rate)  # oversampling by at least 2x to catch all new data
 

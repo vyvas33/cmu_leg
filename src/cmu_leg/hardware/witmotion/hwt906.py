@@ -495,6 +495,23 @@ class WitMotionSensor:
         self.chksum_error = 0
         self.data_frames_rcvd = 0
 
+        # Reset timing state so this stream() call gets a fresh reference point.
+        self._ref_time = None
+        self._data_ts = None
+        self._inter_sample_periods = None
+        self._days_counter = 0
+        self._host_ref_time = None
+        self._host_data_ts_estimate = None
+
+        # Manually discard buffered data transmitted by the sensor previously (reset_input_buffer() unreliable on macOS).
+        drain_deadline = time.perf_counter() + 0.25
+        while time.perf_counter() < drain_deadline:
+            waiting = self._connection.in_waiting
+            if waiting > 0:
+                self._connection.read(waiting)
+            else:
+                time.sleep(0.5 / self.rate)
+
         self._listening = True
         self._parser_thread = threading.Thread(
             target=self._host_side_parsing_thread, name="WitMotion-Parsing-Thread", daemon=True
@@ -807,14 +824,12 @@ class WitMotionSensor:
     @_config_only
     def set_filter_coefficient(self, filtk_val):
         """
-        Configure the sensor's internal attitude smoothing filter (Register 0x25).
+        Configure the sensor's internal dynamic filtering coefficient (Register 0x25, FILTK).
 
-        Note: This parameter controls the internal Kalman filtering for the calculated
-        attitude (Euler angles/quaternions) only. It does NOT apply low-pass filtering to
-        raw outputs (Acc/Gyro); raw filtering must be set using set_lpf().
+        Range: 1 (max smoothing, most lag) to 10000 (minimal smoothing, most real-time). Hardware default: 30.
 
         Args:
-            filtk_val (int): Filter coefficient between 1 (minimal smoothing) and 10000 (maximum smoothing).
+            filtk_val (int): Filter coefficient, 1-10000.
         """
         if not (1 <= filtk_val <= 10000):
             raise ValueError("Filter coefficient must be between 1 and 10000.")
@@ -968,6 +983,7 @@ class WitMotionSensor:
             ]
             if rsw & (1 << bit)
         ]
+        config = {"active_outputs": enabled_outputs}
         print(f"Active Modalities (RSW 0x02):   {', '.join(enabled_outputs)}")
         rate_inv = {v: k for k, v in self._RATE_MAP.items()}
         baud_inv = {v: k for k, v in self._BAUD_MAP.items()}
@@ -981,34 +997,52 @@ class WitMotionSensor:
         gyro_opts = ", ".join(str(k) for k in self._GYRO_RANGE_MAP)
         acc_opts = ", ".join(str(k) for k in self._ACC_RANGE_MAP)
 
+        config["rate_hz"] = rate_inv[chunk1[1]]
+        config["baud_bps"] = baud_inv[chunk1[2]]
+        config["lpf_hz"] = lpf_inv[chunk2[0]]
         print(f"Output Return Rate (0x03):      {rate_inv[chunk1[1]]} Hz  [options: {rate_opts} Hz]")
         print(f"Baud Rate (0x04):               {baud_inv[chunk1[2]]} bps  [options: {baud_opts} bps]")
         print(f"LPF Cutoff Frequency (0x1F):    {lpf_inv[chunk2[0]]} Hz  [options: {lpf_opts} Hz]")
 
         hw_gyro_range = gyro_inv[chunk2[1]]
         gyro_res = hw_gyro_range / 32768.0
+        config["gyro_range_dps"] = hw_gyro_range
+        config["gyro_res_dps_per_lsb"] = gyro_res
         print(
             f"Gyroscope Range (0x20):         ±{hw_gyro_range} dps with {gyro_res:.6f} dps/LSB [options: ±{gyro_opts} dps]"
         )
 
         hw_acc_range = acc_inv[chunk2[2]]
         acc_res = hw_acc_range / 32768.0
+        config["acc_range_g"] = hw_acc_range
+        config["acc_res_g_per_lsb"] = acc_res
+        config["standard_gravity"] = self._STANDARD_GRAVITY
         print(
             f"Accelerometer Range (0x21):     ±{hw_acc_range} g with {acc_res:.6f} g/LSB and g = {self._STANDARD_GRAVITY} m/s² [options: ±{acc_opts} g]"
         )
 
+        config["mounting_orientation"] = "Vertical" if chunk3[0] == 1 else "Horizontal"
+        config["attitude_algorithm"] = "6-axis" if chunk3[1] == 1 else "9-axis"
+        config["filtk"] = chunk3[2]
         print(f"Mounting Orientation (0x23):    {'Vertical' if chunk3[0] == 1 else 'Horizontal'}")
         print(f"Attitude Algorithm (0x24):      {'6-axis' if chunk3[1] == 1 else '9-axis'}")
         print(f"Smoothing Filter FILTK (0x25):  {chunk3[2]}")
 
+        config["gyro_autocal_enabled"] = chunk4[0] != 1
         print(f"Gyro Auto-Calibration (0x63):   {'Disabled' if chunk4[0] == 1 else 'Enabled'}")
 
+        config["acc_offset"] = offsets["acc_offset"]
+        config["gyro_offset"] = offsets["gyro_offset"]
+        config["mag_offset"] = offsets["mag_offset"]
         print("Manual Bias Offsets (0x05–0x0D)")
         print(f" ... Acc Offsets  (X,Y,Z):      {offsets['acc_offset']}")
         print(f" ... Gyro Offsets (X,Y,Z):      {offsets['gyro_offset']}")
         print(f" ... Mag Offsets  (X,Y,Z):      {offsets['mag_offset']}")
 
+        config["led_enabled"] = led_reg[0] != 1
         print(f"Status LED (0x1B):              {'Disabled' if led_reg[0] == 1 else 'Enabled'}\n\n")
+
+        return config
 
     # --------------------------------------
     # 4. LOW-LEVEL REGISTER ACCESS (PRIVATE)
@@ -1275,12 +1309,15 @@ class WitMotionSensor:
 
         host_time_s is anchored to imu_ts's own timescale at the first complete frame,
         so their difference reflects true wire/parsing latency instead of an arbitrary
-        startup offset between two independently-zeroed clocks.
+        startup offset between two independently-zeroed clocks. If the Time packet
+        (0x50) is disabled (ts=False in set_outputs()), there is no device timescale to
+        anchor to, so host_time_s falls back to tracking elapsed host time directly.
         """
         host_raw_time = time.perf_counter()
 
         if self._host_ref_time is None:
-            self._host_ref_time = host_raw_time - self._sensor_data["time_s"]
+            time_s = self._sensor_data["time_s"]
+            self._host_ref_time = host_raw_time - (time_s if time_s is not None else 0.0)
 
         # noisy measurement of data timestamp in host
         host_data_ts = host_raw_time - self._host_ref_time

@@ -2,13 +2,19 @@
 Plot the CSV logs from a completed prosthesis run.
 
 Usage:
-    uv run python -m cmu_leg.utility.plot_run <run_dir>
-    uv run python -m cmu_leg.utility.plot_run          # list available runs
+    uv run python -m cmu_leg.utility.plot_run              # plot the latest run
+    uv run python -m cmu_leg.utility.plot_run --run NAME   # plot a specific run
+    uv run python -m cmu_leg.utility.plot_run --list       # list available runs
 
-<run_dir> can be an absolute path, a relative path, or just the directory
-name (searched under output/ at the repo root).
+NAME can be an absolute path, a relative path, or just the directory name
+(searched under output/ at the repo root).
 
-Plots are saved as PNGs into the same run directory.
+Works on both single-process and multiprocess runs with no extra flags: every
+CSV is dispatched by the suffix of its filename, so `state`, `low_prosthesis_state`
+and `est_prosthesis_state` all get the state plots, `high_torque`/`torque` the
+torque plots, `low_drive`/`drive` the drive plots, and every `*_idle` its own
+loop-timing plot. PNG names are prefixed with the source CSV stem, so per-process
+logs never clobber each other. Plots are saved into the run directory.
 """
 
 import argparse
@@ -49,7 +55,7 @@ def _read_csv(path: Path) -> dict[str, list[float]]:
     return cols
 
 
-def _plot(title, t, series: dict, ylabel: str, out: Path, fname: str) -> None:
+def _plot(title, t, series: dict, ylabel: str, out: Path, fname: str, prefix: str = "") -> None:
     fig, ax = plt.subplots(figsize=(11, 5))
     for label, y in series.items():
         ax.plot(t, y, label=label, linewidth=1.0)
@@ -59,114 +65,132 @@ def _plot(title, t, series: dict, ylabel: str, out: Path, fname: str) -> None:
     ax.legend()
     ax.grid(alpha=0.3)
     fig.tight_layout()
-    png = out / fname
+    png = out / f"{prefix}{fname}"
     fig.savefig(png, dpi=110)
     plt.close(fig)
     print("saved", png)
-
-
-def _deg(vals: list[float]) -> list[float]:
-    return [degrees(v) for v in vals]
 
 
 # ---------------------------------------------------------------------------
 # per-CSV plotters
 # ---------------------------------------------------------------------------
 
-def _plot_state(d: dict, out: Path) -> None:
+def _panel(d: dict, out: Path, prefix: str, title: str, spec: dict,
+           ylabel: str, fname: str, t_key: str = "t") -> None:
+    """Build one plot from a {label: (transform, column)} spec, skipping any
+    column that is absent so a schema mismatch drops that series instead of
+    crashing the whole run. `transform` is a per-value fn or None (identity)."""
+    if t_key not in d:
+        return
+    t = d[t_key]
+    series = {}
+    for label, (fn, col) in spec.items():
+        if col in d:
+            series[label] = [fn(v) for v in d[col]] if fn else d[col]
+    if series:
+        _plot(title, t, series, ylabel, out, fname, prefix)
+
+
+def _plot_state(d: dict, out: Path, prefix: str = "") -> None:
+    _panel(d, out, prefix, "Hip angle (ESKF)",
+           {"hip": (degrees, "hip_angle")},
+           "angle [deg]", "hip_angle.png")
+    _panel(d, out, prefix, "Hip velocity (ESKF)",
+           {"hip": (degrees, "hip_velocity")},
+           "velocity [deg/s]", "hip_velocity.png")
+    _panel(d, out, prefix, "Knee angles",
+           {"motor": (degrees, "knee_motor_angle"), "joint": (degrees, "knee_angle")},
+           "angle [deg]", "knee_angles.png")
+    _panel(d, out, prefix, "Knee velocities",
+           {"motor": (degrees, "knee_motor_velocity"), "joint": (degrees, "knee_velocity")},
+           "velocity [deg/s]", "knee_velocities.png")
+    _panel(d, out, prefix, "Ankle angles",
+           {"motor": (degrees, "ankle_motor_angle"), "spring": (degrees, "ankle_spring_angle"),
+            "joint": (degrees, "ankle_angle")},
+           "angle [deg]", "ankle_angles.png")
+    _panel(d, out, prefix, "Ankle velocities",
+           {"motor": (degrees, "ankle_motor_velocity"), "spring": (degrees, "ankle_spring_velocity"),
+            "joint": (degrees, "ankle_velocity")},
+           "velocity [deg/s]", "ankle_velocities.png")
+    _panel(d, out, prefix, "Measured joint torques",
+           {"knee": (None, "knee_torque_measured"), "ankle": (None, "ankle_torque_measured")},
+           "torque [Nm]", "measured_torques.png")
+    _panel(d, out, prefix, "Ground reaction forces",
+           {"toe": (None, "toe_grf"), "heel": (None, "heel_grf"),
+            "R": (None, "grf_R"), "L": (None, "grf_L")},
+           "GRF", "grf.png")
+
+
+def _plot_torque(d: dict, out: Path, prefix: str = "") -> None:
+    _panel(d, out, prefix, "Desired torques (high-level)",
+           {"knee": (None, "knee_desired"), "ankle": (None, "ankle_desired")},
+           "torque [Nm]", "desired_torques.png")
+
+
+def _plot_lowlevel(d: dict, out: Path, prefix: str = "") -> None:
+    _panel(d, out, prefix, "Commanded torques (low-level)",
+           {"knee": (None, "knee_torque_commanded"), "ankle": (None, "ankle_torque_commanded")},
+           "torque [Nm]", "ll_torques_commanded.png")
+    _panel(d, out, prefix, "Motor torque feedforward",
+           {"knee": (None, "knee_motor_torque_ff"), "ankle": (None, "ankle_motor_torque_ff")},
+           "torque [Nm]", "ll_torques_ff.png")
+    _panel(d, out, prefix, "Desired joint velocities",
+           {"knee": (degrees, "knee_velocity_desired"), "ankle": (degrees, "ankle_velocity_desired")},
+           "velocity [deg/s]", "ll_velocity_desired.png")
+    _panel(d, out, prefix, "Commanded velocities (low-level)",
+           {"knee": (degrees, "knee_velocity_commanded"), "ankle": (degrees, "ankle_velocity_commanded")},
+           "velocity [deg/s]", "ll_velocity_commanded.png")
+
+
+def _plot_gait(d: dict, out: Path, prefix: str = "") -> None:
+    # contact and in_stance are both 0/1, so plotted raw they sit on top of each
+    # other and the interesting part -- where they DISAGREE -- is invisible.
+    # Offsetting stance by a little separates the traces; the disagreement is
+    # exactly what min_stance/min_swing suppressed.
+    _panel(d, out, prefix, "Gait FSM: contact (measured) vs stance (FSM)",
+           {"contact": (None, "contact"),
+            "in_stance (+0.05)": (lambda v: v + 0.05, "in_stance"),
+            "mode/4": (lambda v: v / 4.0, "mode")},
+           "flag", "gait_contact_vs_stance.png")
+    # Stance duration is what sizes the next swing, so a wrong one shows up as a
+    # wrong swing T. NaN until the first stance completes -> the line starts late.
+    _panel(d, out, prefix, "Last completed stance duration",
+           {"stance": (None, "stance_duration")},
+           "duration [s]", "gait_stance_duration.png")
+
+
+def _plot_drive(d: dict, out: Path, prefix: str = "") -> None:
+    _panel(d, out, prefix, "Drive velocity commands",
+           {"knee": (None, "knee_velocity_counts"), "ankle": (None, "ankle_velocity_counts")},
+           "counts/s", "drive_velocity_counts.png")
+    _panel(d, out, prefix, "Drive torque commands",
+           {"knee": (None, "knee_torque_per_mille"), "ankle": (None, "ankle_torque_per_mille")},
+           "per-mille of rated torque", "drive_torque_permille.png")
+
+
+def _plot_idle(d: dict, out: Path, prefix: str = "") -> None:
+    """Loop-timing plot from a *_idle CSV. Uses the measured `dt` column when
+    present (multiprocess) and otherwise derives it from consecutive `t`."""
     t = d["t"]
-    _plot("Knee angles", t,
-          {"motor": _deg(d["knee_motor_angle"]),
-           "joint": _deg(d["knee_angle"])},
-          "angle [deg]", out, "knee_angles.png")
-
-    _plot("Knee velocities", t,
-          {"motor": _deg(d["knee_motor_velocity"]),
-           "joint": _deg(d["knee_velocity"])},
-          "velocity [deg/s]", out, "knee_velocities.png")
-
-    _plot("Ankle angles", t,
-          {"motor": _deg(d["ankle_motor_angle"]),
-           "spring": _deg(d["ankle_spring_angle"]),
-           "joint": _deg(d["ankle_angle"])},
-          "angle [deg]", out, "ankle_angles.png")
-
-    _plot("Ankle velocities", t,
-          {"motor": _deg(d["ankle_motor_velocity"]),
-           "spring": _deg(d["ankle_spring_velocity"]),
-           "joint": _deg(d["ankle_velocity"])},
-          "velocity [deg/s]", out, "ankle_velocities.png")
-
-    _plot("Measured joint torques", t,
-          {"knee": d["knee_torque_measured"],
-           "ankle": d["ankle_torque_measured"]},
-          "torque [Nm]", out, "measured_torques.png")
-
-    _plot("Ground reaction forces", t,
-          {"toe": d["toe_grf"],
-           "heel": d["heel_grf"],
-           "R": d["grf_R"],
-           "L": d["grf_L"]},
-          "GRF", out, "grf.png")
-
-
-def _plot_torque(d: dict, out: Path) -> None:
-    _plot("Desired torques (high-level)", d["t"],
-          {"knee": d["knee_desired"],
-           "ankle": d["ankle_desired"]},
-          "torque [Nm]", out, "desired_torques.png")
-
-
-def _plot_lowlevel(d: dict, out: Path) -> None:
-    t = d["t"]
-    _plot("Commanded torques (low-level)", t,
-          {"knee": d["knee_torque_commanded"],
-           "ankle": d["ankle_torque_commanded"]},
-          "torque [Nm]", out, "ll_torques_commanded.png")
-
-    _plot("Motor torque feedforward", t,
-          {"knee": d["knee_motor_torque_ff"],
-           "ankle": d["ankle_motor_torque_ff"]},
-          "torque [Nm]", out, "ll_torques_ff.png")
-
-    _plot("Desired joint velocities", t,
-          {"knee": _deg(d["knee_velocity_desired"]),
-           "ankle": _deg(d["ankle_velocity_desired"])},
-          "velocity [deg/s]", out, "ll_velocity_desired.png")
-
-    _plot("Commanded velocities (low-level)", t,
-          {"knee": _deg(d["knee_velocity_commanded"]),
-           "ankle": _deg(d["ankle_velocity_commanded"])},
-          "velocity [deg/s]", out, "ll_velocity_commanded.png")
-
-
-def _plot_drive(d: dict, out: Path) -> None:
-    t = d["t"]
-    _plot("Drive velocity commands", t,
-          {"knee": d["knee_velocity_counts"],
-           "ankle": d["ankle_velocity_counts"]},
-          "counts/s", out, "drive_velocity_counts.png")
-
-    _plot("Drive torque commands", t,
-          {"knee": d["knee_torque_per_mille"],
-           "ankle": d["ankle_torque_per_mille"]},
-          "per-mille of rated torque", out, "drive_torque_permille.png")
-
-
-def _plot_loop_idle(t: list[float], out: Path) -> None:
-    freq_hz = [1.0 / (t[i] - t[i - 1]) for i in range(1, len(t))]
-    t_mid = [t[i] for i in range(1, len(t))]
+    if "dt" in d:
+        dt = d["dt"]
+        freq = [1.0 / x if x > 0 else 0.0 for x in dt]
+        t_freq = t
+    else:
+        freq = [1.0 / (t[i] - t[i - 1]) for i in range(1, len(t))]
+        t_freq = t[1:]
 
     fig, ax = plt.subplots(figsize=(11, 4))
-    ax.plot(t_mid, freq_hz, linewidth=0.7)
-    ax.axhline(1000, color="red", linewidth=0.8, linestyle="--", label="1 kHz target")
-    ax.set_title("Control frequency", fontweight="bold")
+    ax.plot(t_freq, freq, linewidth=0.7)
+    ax.axhline(1000, color="red", linewidth=0.8, linestyle="--", label="1 kHz")
+    ax.axhline(500, color="orange", linewidth=0.8, linestyle="--", label="500 Hz")
+    ax.set_title("Loop frequency", fontweight="bold")
     ax.set_xlabel("time [s]")
     ax.set_ylabel("frequency [Hz]")
     ax.legend()
     ax.grid(alpha=0.3)
     fig.tight_layout()
-    png = out / "control_frequency.png"
+    png = out / f"{prefix}loop_frequency.png"
     fig.savefig(png, dpi=110)
     plt.close(fig)
     print("saved", png)
@@ -176,15 +200,26 @@ def _plot_loop_idle(t: list[float], out: Path) -> None:
 # run resolution
 # ---------------------------------------------------------------------------
 
-def _list_runs() -> None:
+def _all_runs() -> list[Path]:
     out = _repo_root() / "output"
-    runs = sorted(out.iterdir()) if out.exists() else []
+    return sorted((r for r in out.iterdir() if r.is_dir()), key=lambda p: p.name) if out.exists() else []
+
+
+def _list_runs() -> None:
+    runs = _all_runs()
     if not runs:
         print("No runs found in output/")
     else:
         print("Available runs:")
         for r in runs:
             print(f"  {r.name}")
+
+
+def _latest_run() -> Path:
+    runs = _all_runs()
+    if not runs:
+        raise SystemExit("No runs found in output/")
+    return runs[-1]
 
 
 def _resolve_run(arg: str) -> Path:
@@ -203,47 +238,65 @@ def _resolve_run(arg: str) -> Path:
 # main
 # ---------------------------------------------------------------------------
 
-_PLOTTERS = {
-    "state":    _plot_state,
-    "torque":   _plot_torque,
-    "lowlevel": _plot_lowlevel,
-    "drive":    _plot_drive,
-}
+# (suffix, plotter) — a CSV is handled by the first plotter whose suffix its
+# filename stem ends with. This makes both single-process (`state`, `torque`,
+# `drive`) and multiprocess (`low_prosthesis_state`, `high_torque`, `low_drive`,
+# `*_idle`) layouts dispatch with no per-layout special-casing. Order matters:
+# more specific suffixes first (e.g. `lowlevel` before `state` is moot here, but
+# keep specifics ahead of generics if you add any).
+_PLOTTERS = [
+    ("lowlevel", _plot_lowlevel),
+    ("output",   _plot_lowlevel),   # low_output = LowLevelOutput (llo): same fields
+    ("state",    _plot_state),
+    ("torque",   _plot_torque),
+    ("drive",    _plot_drive),
+    ("idle",     _plot_idle),
+    ("gait",     _plot_gait),
+]
+
+
+def _dispatch(stem: str):
+    for suffix, fn in _PLOTTERS:
+        if stem.endswith(suffix):
+            return fn
+    return None
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Plot CSV logs from a prosthesis run.",
+        description="Plot CSV logs from a prosthesis run (single- or multiprocess).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="Omit run_dir to list available runs.",
+        epilog="With no arguments, plots the latest run under output/.",
     )
     parser.add_argument(
-        "run_dir", nargs="?",
-        help="Run directory name or path (e.g. 2026-06-30_120000_standing)",
+        "--run", metavar="NAME",
+        help="Run directory name or path (e.g. 2026-06-30_120000_standing). "
+             "Defaults to the latest run.",
+    )
+    parser.add_argument(
+        "--list", action="store_true", help="List available runs and exit.",
     )
     args = parser.parse_args()
 
-    if args.run_dir is None:
+    if args.list:
         _list_runs()
         sys.exit(0)
 
-    run_dir = _resolve_run(args.run_dir)
+    run_dir = _resolve_run(args.run) if args.run else _latest_run()
     print(f"Plotting: {run_dir}")
 
-    state_data = None
-    for name, fn in _PLOTTERS.items():
-        csv_path = run_dir / f"{name}.csv"
-        if not csv_path.exists():
-            print(f"  skipping {name}.csv (not found)")
+    plotted = 0
+    for csv_path in sorted(run_dir.glob("*.csv")):
+        fn = _dispatch(csv_path.stem)
+        if fn is None:
             continue
-        d = _read_csv(csv_path)
-        if name == "state":
-            state_data = d
-        fn(d, run_dir)
+        # Prefix PNGs with the source stem so per-process logs never clobber.
+        prefix = f"{csv_path.stem}__"
+        fn(_read_csv(csv_path), run_dir, prefix)
+        plotted += 1
 
-    if state_data is not None:
-        _plot_loop_idle(state_data["t"], run_dir)
-
+    if plotted == 0:
+        print("  no plottable CSVs found in this run.")
     print("Done.")
 
 

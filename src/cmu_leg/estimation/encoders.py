@@ -9,7 +9,7 @@ Usage:
 
 from math import floor
 
-from cmu_leg.types.sensors import RawEtherCATFrame, EncoderReadings
+from cmu_leg.structures.sensors import RawEtherCATFrame, EncoderReadings
 from cmu_leg.config.params import ENCODERS, ENCODER_CORRECTION, KNEE, ANKLE
 
 

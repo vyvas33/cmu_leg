@@ -1,9 +1,14 @@
 """Animate the leg in the sagittal plane from a completed run.
 
 Usage:
-    uv run python -m cmu_leg.utility.visualise_leg <run_dir>
-    uv run python -m cmu_leg.utility.visualise_leg <run_dir> --fps 20
-    uv run python -m cmu_leg.utility.visualise_leg              # list runs
+    uv run python -m cmu_leg.utility.visualise_leg               # animate latest run
+    uv run python -m cmu_leg.utility.visualise_leg --run NAME    # animate a specific run
+    uv run python -m cmu_leg.utility.visualise_leg --run NAME --fps 20
+    uv run python -m cmu_leg.utility.visualise_leg --list        # list runs
+
+Works on both single-process and multiprocess runs: the state trace is taken
+from whichever of `control_prosthesis_state` (authoritative, ESKF hip), `state`
+(single-process), or `low_prosthesis_state` is present, in that order.
 
 Writes leg.gif into the run directory. The hip is pinned at the origin, so this
 shows the leg's shape over time, not where it is in the world.
@@ -19,11 +24,33 @@ import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation, PillowWriter
 
 from cmu_leg.estimation.leg_kinematics import leg_points
-from cmu_leg.utility.plot_run import _read_csv, _resolve_run, _list_runs
+from cmu_leg.utility.plot_run import _read_csv, _resolve_run, _list_runs, _latest_run
+
+
+def _find_state_csv(run_dir):
+    """Pick the best `*state.csv` in the run. Preference: the control process's
+    authoritative ESKF state (`control_*`, or `est_*` on older runs), then a
+    single-process `state.csv`, then the low-level's local copy (`low_*`). Matches
+    by suffix so it works on both the `*_prosthesis_state` names and older runs."""
+    cands = sorted(run_dir.glob("*state.csv"))
+    if not cands:
+        raise SystemExit(f"No `*state.csv` found in {run_dir.name}.")
+
+    def rank(p) -> int:
+        s = p.stem
+        if s.startswith("control") or s.startswith("est"):  # est* = older runs
+            return 0
+        if s == "state":
+            return 1
+        if s.startswith("low"):
+            return 2
+        return 3
+
+    return min(cands, key=rank)
 
 
 def _frames(run_dir, fps: int):
-    d = _read_csv(run_dir / "state.csv")
+    d = _read_csv(_find_state_csv(run_dir))
     t = np.asarray(d["t"])
     hip = np.asarray(d["hip_angle"])
     knee = np.asarray(d["knee_angle"])
@@ -86,15 +113,17 @@ def main() -> None:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("run_dir", nargs="?", default=None)
+    parser.add_argument("--run", metavar="NAME", default=None,
+                        help="Run directory name or path. Defaults to the latest run.")
+    parser.add_argument("--list", action="store_true", help="List available runs and exit.")
     parser.add_argument("--fps", type=int, default=30)
     args = parser.parse_args()
 
-    if args.run_dir is None:
+    if args.list:
         _list_runs()
         sys.exit(0)
 
-    run_dir = _resolve_run(args.run_dir)
+    run_dir = _resolve_run(args.run) if args.run else _latest_run()
     print(f"Animating: {run_dir}")
     animate(run_dir, args.fps)
 

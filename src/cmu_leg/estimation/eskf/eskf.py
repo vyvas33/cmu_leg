@@ -8,7 +8,7 @@ the error-state Kalman filter" (2017, arXiv:1711.02508v1)
 Follows Haosen (Russell) Xing's implementation of ESKF.
 
 Usage:
-    class StateEstimator:
+    class ProsthesisStateEstimator:
         def __init__(self):
             self._eskf = ESKF()            # or ESKF(cfg) to override ESKF_CFG
 
@@ -35,11 +35,11 @@ Author: vkalva
 """
 
 from cmu_leg.estimation.eskf.helpers import q_to_R, S, hat, norm, Euler_angles_collocating_vectors, quat_prod, R_to_Euler, angle_axis_to_q ,NominalState
-from cmu_leg.estimation.eskf.measurements import meas_pos_loop_closure, meas_vel_loop_closure, meas_zupt
+from cmu_leg.estimation.eskf.measurements import meas_pos_loop_closure, meas_vel_loop_closure, meas_zupt, P_SH_TH
 from cmu_leg.estimation.eskf.detectors import ZUPT_AdaptiveGLRT
 from cmu_leg.config.params import ESKFConfig, ESKF_CFG, LEG
-from cmu_leg.types.sensors import IMUFrame
-from cmu_leg.types.state import ProsthesisState
+from cmu_leg.structures.sensors import IMUFrame
+from cmu_leg.structures.state import ProsthesisState
 import numpy as np
 
 # Sensor -> body maps. The permutation parts are exact 90 deg axis swaps. The
@@ -67,11 +67,20 @@ R_BODY_SENSOR_FO = np.array([[-1.0, 0.0, 0.0],
 # Error-state block starts (thigh 0:15, foot 15:30; sub-order matches
 # measurements.py _blk: [dtheta, dw_b, dp, dv, da_b]). Each measurement's H is
 # a 3x3 identity at one of these, so _kalman_update takes the start index.
+TH_DTH = 0    # thigh attitude   (vel loop closure, extra block)
 TH_DP = 6     # thigh position   (pos loop closure)
 TH_DV = 9     # thigh velocity   (vel loop closure)
 FO_DV = 24    # foot velocity    (zupt)
 
 _I3 = np.eye(3)   # read-only; scaled copies only, never mutated in place
+
+# Thigh IMU origin -> knee, and -> hip, in the thigh BODY frame. The filter
+# tracks the thigh IMU; both joints on that link are fixed offsets from it, so
+# neither needs the knee angle. +z runs knee -> hip along the link, the same
+# convention measurements.py uses for the shank ([0, 0, L_SHANK] is ankle ->
+# knee), which is why the hip term is +hip_to_knee.
+_P_TH_KNEE = -P_SH_TH
+_P_TH_HIP = _P_TH_KNEE + np.array([0.0, 0.0, LEG.hip_to_knee])
 
 
 class ESKF:
@@ -113,6 +122,14 @@ class ESKF:
         self.R_model_vel = np.eye(3) * cfg.sigma_model_vel ** 2
         self.sigma_zupt = cfg.sigma_zupt
 
+        # Treadmill: one positive scalar, two opposite-signed uses (see
+        # ESKFConfig.treadmill_speed). The belt carries the stance foot
+        # backward, so the "still foot" pseudo-measurement is negative; the
+        # published x adds the forward displacement back. Both are exactly zero
+        # overground, so there is one code path.
+        self._v_foot_nav = np.array([-cfg.treadmill_speed, 0.0, 0.0])
+        self._treadmill_x = 0.0
+
         self.init_duration = cfg.init_duration
         self.beta = cfg.comp_beta
         self.t_init = None
@@ -149,6 +166,11 @@ class ESKF:
         self.healthy = (t - imu.thigh_time <= self.cfg.imu_stale_timeout
                         and t - imu.foot_time <= self.cfg.imu_stale_timeout)
         self.t_prev = t
+
+        # integrated on the loop's dt rather than off t, so it cannot jump when
+        # the caller's clock does. Runs during init too: it is a pure clock, not
+        # an estimate, and the published x is gated on .initialized anyway.
+        self._treadmill_x += self.cfg.treadmill_speed * dt
 
         # first call: latch the init clock, seed both attitudes to identity
         if self.th.q is None or self.fo.q is None:
@@ -193,18 +215,40 @@ class ESKF:
         hip_velocity comes off the gyro
 
         hip_accel is deliberately not written: it needs a differentiator, and
-        StateEstimator already owns all of those.
+        ProsthesisStateEstimator already owns all of those.
+
+        hip/knee sagittal positions are fixed offsets from the thigh IMU along
+        the thigh link, so the knee angle never enters. Published as (x, z) in
+        the nav frame: +z up, +x the heading the filter happened to start with.
+        Yaw is unobservable here, so the absolute values carry no meaning on
+        their own -- only differences over a short window do, which is what the
+        NN predictor consumes. x additionally carries the integrated treadmill
+        displacement, so on a belt it advances as it would overground.
+
+        foot_stationary republishes the stationarity detector's decision, the
+        same one the zero-velocity update runs off. False until the filter is
+        initialized, since the detector only runs in _correct.
         """
         if not self.initialized:
             # leave the previous values on the bus rather than publishing an
             # unconverged attitude
             return
 
-        roll, pitch, _ = R_to_Euler(q_to_R(self.th.q))
+        R_th = q_to_R(self.th.q)
+        roll, pitch, _ = R_to_Euler(R_th)
         w_th = w_m_th - self.th.w_b            # bias-corrected, thigh body frame
 
         state.hip_angle = -pitch
         state.hip_velocity = -(np.cos(roll) * w_th[1] - np.sin(roll) * w_th[2])
+
+        state.foot_stationary = self._zupt_active
+
+        p_hip = self.th.p + R_th @ _P_TH_HIP
+        p_knee = self.th.p + R_th @ _P_TH_KNEE
+        state.hip_pos_x = p_hip[0] + self._treadmill_x
+        state.hip_pos_z = p_hip[2]
+        state.knee_pos_x = p_knee[0] + self._treadmill_x
+        state.knee_pos_z = p_knee[2]
 
     @staticmethod
     def _sensor_to_body(imu: IMUFrame):
@@ -293,7 +337,7 @@ class ESKF:
         if fo_fresh:
             self._zupt_active = self._zupt_fo.update(a_m_fo, w_m_fo)
         if self._zupt_active:
-            r, V = meas_zupt(self.fo, self.sigma_zupt)
+            r, V = meas_zupt(self.fo, self.sigma_zupt, self._v_foot_nav)
             self._kalman_update(r, FO_DV, V)
 
         # encoders tie the thigh to the foot: position, then velocity
@@ -301,27 +345,44 @@ class ESKF:
             self.fo, self.th, state, self.P, self.R_enc, self.R_model_pos)
         self._kalman_update(r, TH_DP, V)
 
-        r, V = meas_vel_loop_closure(
+        r, V, H_att = meas_vel_loop_closure(
             self.fo, self.th, state, theta_dot, w_m_fo, self.P,
             self.R_rate, self.R_model_vel)
-        self._kalman_update(r, TH_DV, V)
+        # H_att = +R_th @ hat(V_b_nt[:3]) observes thigh attitude off the same
+        # velocity residual (the draft's dropped block). Without it thigh pitch
+        # rides gyro integration and drifts -- see cfg.correct_thigh_attitude.
+        extra = [(TH_DTH, H_att)] if self.cfg.correct_thigh_attitude else None
+        self._kalman_update(r, TH_DV, V, extra)
 
-    def _kalman_update(self, r, b, V):
-        # Every measurement's H is a 3x3 identity selecting the error-state
-        # block at column b (b:b+3), so the full 30x30 Joseph form collapses to
-        # slices: H @ P == P[b:b+3, :], P @ H.T == P[:, b:b+3]. This is the SAME
-        # Joseph update (I-KH) P (I-KH).T + K V K.T, just with the zeros of H
-        # skipped -- no 3x30 H, no 30x30 eye, one 3x3 inverse.
+    def _kalman_update(self, r, b, V, extra=None):
+        # H is a 3x3 identity selecting the error-state block at column b, PLUS
+        # any `extra` = [(offset, M3x3), ...] blocks (M at cols offset:offset+3).
+        # The Joseph form (I-KH) P (I-KH).T + K V K.T is computed with the zeros
+        # of H skipped: each H@P / P@H.T is a sum over the live blocks. With
+        # extra=None this is byte-for-byte the old single-identity-block update.
         P = self.P
-        Pcol = P[:, b:b + 3]                     # P @ H.T          (30x3)
-        Prow = P[b:b + 3, :]                      # H @ P            (3x30)
-        S = Prow[:, b:b + 3] + V                  # H P H.T + V      (3x3)
-        K = Pcol @ np.linalg.inv(S)               # gain             (30x3)
+
+        PHt = P[:, b:b + 3].copy()                # P @ H.T          (30x3)
+        Prow = P[b:b + 3, :].copy()               # H @ P            (3x30)
+        if extra:
+            for off, M in extra:
+                PHt = PHt + P[:, off:off + 3] @ M.T
+                Prow = Prow + M @ P[off:off + 3, :]
+
+        S = PHt[b:b + 3, :] + V                    # H P H.T + V      (3x3)
+        if extra:
+            for off, M in extra:
+                S = S + M @ PHt[off:off + 3, :]
+        K = PHt @ np.linalg.inv(S)                # gain             (30x3)
         self.del_x = K @ r
 
-        MP = P - K @ Prow                         # (I - K H) P      (30x30)
-        # (I - K H) P (I - K H).T + K V K.T; MP @ (I-KH).T touches cols b:b+3
-        self.P = MP - MP[:, b:b + 3] @ K.T + K @ V @ K.T
+        MP = P - K @ Prow                          # (I - K H) P      (30x30)
+        MHt = MP[:, b:b + 3].copy()                # MP @ H.T         (30x3)
+        if extra:
+            for off, M in extra:
+                MHt = MHt + MP[:, off:off + 3] @ M.T
+        # (I - K H) P (I - K H).T + K V K.T
+        self.P = MP - MHt @ K.T + K @ V @ K.T
 
         # inject the error into each nominal state
         for body, offset in ((self.th, 0), (self.fo, 15)):

@@ -22,11 +22,11 @@ hgeyer, June 2026
 import sys
 import time
 
-from hwt906 import WitMotionSensor, discover_baud, discover_port
+from cmu_leg.hardware.witmotion.hwt906 import WitMotionSensor, discover_baud, discover_port
 
 # Set True to allow changing the baud rate. Keep False by default — a wrong value
 # can break communication and require running recovery.py to recover.
-ENABLE_CHANGE_BAUDRATE = False
+ENABLE_CHANGE_BAUDRATE = True
 
 
 def main():
@@ -37,7 +37,7 @@ def main():
     print("Discovering sensor port and baudrate.")
     sensor = None
     try:
-        port = discover_port()
+        port = "/dev/ttyUSB0"
         baud = discover_baud(port)
         sensor = WitMotionSensor(port=port, baud_bps=baud)
     except (FileNotFoundError, ValueError, ConnectionError) as e:
@@ -68,7 +68,7 @@ def main():
         # Options: 9600, 115200, 230400, 460800, 921600 bps
         # NOTE: takes effect immediately; disconnect/reconnect required before saving.
         if ENABLE_CHANGE_BAUDRATE:
-            sensor.set_baudrate(460800)
+            sensor.set_baudrate(921600)
             sensor.disconnect()
             time.sleep(0.5)
             print("\nReconnecting ...\n")
@@ -86,7 +86,7 @@ def main():
 
         # Active output modalities (register 0x02)
         # Each flag enables the corresponding data packet in the stream.
-        sensor.set_outputs(ts=False, acc=True, gyro=True, ang=False, mag=True, quat=False)
+        sensor.set_outputs(ts=True, acc=True, gyro=True, ang=False, mag=False, quat=False)
 
         # Gyroscope full-scale range (register 0x20)
         # Options: 250, 500, 1000, 2000 dps

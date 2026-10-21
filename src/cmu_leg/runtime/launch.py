@@ -1,0 +1,187 @@
+"""
+Multiprocess launcher (the parent). Builds the shared IPC objects, spawns the
+three child processes, and manages their lifecycle.
+
+This is the multiprocess run entry point. It will eventually be folded into
+main.py once main becomes the multiprocess entry (today main.py is the
+single-process path), at which point this file goes away.
+
+Processes (both async, each its own loop):
+    low-level  -- EtherCAT + ProprioceptiveEstimator; writes B1, reads B3 (~1 kHz)
+    control    -- ESKF + high-level controller (MERGED); reads B1, writes B3 (~500 Hz)
+
+Buffers:
+    B1 StateBuffer         low-level -> control  (full proprioceptive state)
+    B3 CommandBuffer       control -> low-level  (torque + standing)
+
+The estimator and high-level stages used to be two separate processes with a B2
+StateBuffer between them; they were merged into `control` to cut the ESKF->
+controller IPC hop that was destabilizing standing (see runtime/control.py).
+
+Startup handshake:
+  1. spawn low-level; it inits EtherCAT and sets init_evnt.
+  2. block on init_evnt (hardware confirmed up) -- only THEN spawn control.
+  3. control inits its IMUs (~seconds) and then stamps the shared start_time.
+     Low-level is NOT blocked -- it heartbeats the EtherCAT bus (holding the drives
+     in OP) and reads start_time once stamped, so both loops begin from the common
+     origin without letting the bus go silent. No Barrier: control is the sole
+     stamper now that it's the only other process.
+
+The parent does not run a realtime loop and does not log; each child logs its own
+trace into the shared run_dir. The parent monitors liveness and, on Ctrl-C /
+SIGTERM / a child fault (stop_event), terminates everything gracefully.
+
+Run:  uv run python -m cmu_leg.runtime.launch
+"""
+
+import os
+import json
+import subprocess
+from dataclasses import asdict, is_dataclass
+from multiprocessing import (Process, Event, Value,
+                             set_start_method, freeze_support)
+from time import perf_counter
+
+from cmu_leg.runtime.buffer import StateBuffer, CommandBuffer
+from cmu_leg.runtime.guard import ExIntGuard
+from cmu_leg.runtime import low_level, control
+from cmu_leg.utility.utils import make_run_dir
+import cmu_leg.config.params as params
+
+# Loop periods derive from the config rates -- single source of truth. The
+# control rate in particular is shared with the fixed-coefficient filters that
+# tick in the control process (standing velocity lowpasses), so it must not drift
+# from what those filters were designed at. Everything else (tmax, timeouts,
+# cores, warmups, safety gates) is in params.RUNTIME.
+DT_LOW = 1.0 / params.COMMON.sample_rate              # low-level loop period (s)
+DT_CONTROL = 1.0 / params.COMMON.control_sample_rate  # control loop period (s)
+
+
+def _git_info():
+    """Best-effort {commit, dirty} so a run's log pins the exact code. None on any
+    failure (not a repo / git missing) -- never blocks a run."""
+    root = os.path.dirname(os.path.abspath(__file__))
+    try:
+        commit = subprocess.check_output(
+            ["git", "-C", root, "rev-parse", "HEAD"],
+            text=True, stderr=subprocess.DEVNULL).strip()
+        dirty = bool(subprocess.check_output(
+            ["git", "-C", root, "status", "--porcelain"],
+            text=True, stderr=subprocess.DEVNULL).strip())
+        return {"commit": commit, "dirty": dirty}
+    except Exception:
+        return {"commit": None, "dirty": None}
+
+
+def _dump_config(run_dir):
+    """Write config.json (git + the params this run used) into run_dir and echo a
+    one-line summary, so every run is self-documenting -- no hand notes needed.
+
+    Every dataclass INSTANCE in config.params is discovered and dumped, rather
+    than a hand-listed subset. The list version silently omitted CONTACT and
+    MJSWING, so a run's log could not say which contact thresholds or swing
+    gains produced it -- and a session was lost re-deriving thresholds from the
+    logged `contact` column because of exactly that. Auto-discovery means a new
+    param group is captured without anyone remembering to come back here.
+
+    Keys are the lowercased instance name (RUNTIME -> "runtime"), which keeps the
+    three that already existed readable by anything parsing older runs. asdict
+    recurses, so nested groups (e.g. IMPEDANCE's per-stance gains) come along.
+    """
+    cfg = {"git": _git_info()}
+    for name, obj in vars(params).items():
+        # instances only -- is_dataclass is also true for the class objects
+        if is_dataclass(obj) and not isinstance(obj, type):
+            cfg[name.lower()] = asdict(obj)
+    with open(os.path.join(run_dir, "config.json"), "w") as f:
+        json.dump(cfg, f, indent=2, default=str)
+    rt, g = params.RUNTIME, cfg["git"]
+    tag = (str(g["commit"])[:10] + (" (dirty)" if g["dirty"] else "")) if g["commit"] else "no-git"
+
+
+def main():
+    rt = params.RUNTIME
+    run_dir = make_run_dir("multiprocess")
+    _dump_config(run_dir)
+
+    # --- shared IPC objects (built in the parent, passed to the children) ----
+    b1 = StateBuffer()            # low-level -> control (full physical state)
+    b3 = CommandBuffer()          # control   -> low-level (torque + standing)
+    stop_event = Event()          # any process -> shutdown everywhere
+    init_evnt = Event()           # low-level -> "EtherCAT is up"
+    start_time = Value("d", 0.0)  # synced perf_counter origin (control stamps it)
+    # No Barrier: control is the sole stamper. Low-level does NOT block on it -- it
+    # must keep the EtherCAT bus alive (heartbeat) or the Elmo SM watchdog drops the
+    # drives out of OP during control's IMU init. It reads the same start_time once
+    # control stamps it after IMU bring-up.
+
+    procs = []
+
+    def terminate():
+        """Set the stop flag and join the children; force-kill any straggler."""
+        stop_event.set()
+        for p in procs:
+            p.join(timeout=5.0)
+            if p.is_alive():
+                p.terminate()
+                p.join()
+        print("\nMAIN: multiprocess control terminated gracefully.")
+
+    with ExIntGuard("MAIN", stop_event, terminate, is_main_process=True):
+        # --- spawn low-level, then wait for its hardware to come up ----------
+        low_p = Process(
+            name="LOWLEVEL", target=low_level.run,
+            kwargs=dict(dt=DT_LOW, tmax=rt.tmax, buffer=b1, cmd_buf=b3,
+                        stop_event=stop_event, start_time=start_time,
+                        init_evnt=init_evnt, run_dir=run_dir,
+                        core=rt.cores[0], rt_priority=rt.rt_priority[0]))
+        low_p.start()
+        procs.append(low_p)
+
+        if not init_evnt.wait(timeout=rt.hw_init_timeout):
+            print("MAIN: low-level hardware init failed/timed out. Shutting down.")
+            terminate()
+            return
+
+        # --- hardware confirmed up: spawn control (ESKF + high-level) --------
+        ctrl_p = Process(
+            name="CONTROL", target=control.run,
+            kwargs=dict(dt=DT_CONTROL, tmax=rt.tmax, buffer=b1, cmd_buf=b3,
+                        stop_event=stop_event, start_time=start_time,
+                        run_dir=run_dir,
+                        core=rt.cores[1], rt_priority=rt.rt_priority[1]))
+        ctrl_p.start()
+        procs.append(ctrl_p)
+
+        # Affinity and SCHED_FIFO are set by each child in its own run(), not
+        # from here: sched_setscheduler acts on the calling process, and setting
+        # affinity after spawn left the child's first ticks on whatever core it
+        # happened to start on.
+
+        # --- anchor the deadline to the control-stamped origin ----------------
+        # Control stamps `start_time` only after its IMU init (~seconds), which
+        # trails spawn. Base the liveness deadline on THAT origin, not the parent's
+        # spawn time -- otherwise it fires ~(IMU-init) seconds early and cuts the
+        # run short (each child runs exactly tmax/dt cycles from start_time).
+        origin_timeout = perf_counter() + rt.hw_init_timeout + 10.0
+        while start_time.value == 0.0 and perf_counter() < origin_timeout:
+            if stop_event.wait(timeout=0.05):
+                break
+        t0 = start_time.value or perf_counter()
+
+        # --- monitor until the children finish, fault, or we're interrupted --
+        # tmax now runs from the first actuating tick, which the operator may
+        # take up to max_arm_wait_s to trigger, so the parent's liveness
+        # deadline has to cover the wait as well as the run.
+        deadline = t0 + rt.max_arm_wait_s + rt.tmax + 1.0
+        while any(p.is_alive() for p in procs) and perf_counter() < deadline:
+            if stop_event.wait(timeout=0.5):
+                break
+
+    # ExIntGuard runs terminate() on the way out (normal exit or interrupt).
+
+
+if __name__ == "__main__":
+    freeze_support()
+    set_start_method("spawn", force=True)
+    main()

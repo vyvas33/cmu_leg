@@ -13,14 +13,15 @@ from cmu_leg.hardware.ethercat_io import EtherCATInterface
 from cmu_leg.hardware.imu_io import IMUInterface
 
 # control stages (run in order each tick)
-from cmu_leg.estimation.state_estimator import StateEstimator
+from cmu_leg.estimation.state_estimator import ProsthesisStateEstimator
 from cmu_leg.control.high_level_control import ProsthesisControl
 from cmu_leg.control.low_level_control import LowLevelControl
 
 # data types
-from cmu_leg.types.state import ProsthesisState
-from cmu_leg.types.sensors import IMUFrame   # standing is encoder-only; pass an empty frame
-from cmu_leg.types.commands import DriveCommand
+from cmu_leg.structures.state import ProsthesisState
+from cmu_leg.structures.sensors import IMUFrame   # standing is encoder-only; pass an empty frame
+from cmu_leg.structures.commands import DriveCommand, Mode
+from cmu_leg.runtime.operator import OperatorInput
 from cmu_leg.config.params import COMMON, STANDING
 
 # logging output dir (post-loop dump)
@@ -45,7 +46,7 @@ def main():
     ec.connect()
 
     # control
-    se = StateEstimator()
+    se = ProsthesisStateEstimator()
     pc = ProsthesisControl()
     llc = LowLevelControl()
     
@@ -57,23 +58,38 @@ def main():
     reached_enabled = False
     frame = ec.read()
     t_prev = - PERIOD # so the first tick's dt is ~ PERIOD
+    cycle = 0         # OperatorInput.seq -- must advance or the FSM's staleness
+                      # watchdog treats the operator as dead and drops to HOLD
 
     def run(duration: float, standing=False) -> None:
-        """Tick at 1 kHz for `duration`"""
-        nonlocal clk, reached_enabled, frame, t_prev
+        """Tick at 1 kHz for `duration`.
+
+        `standing` here is the single-process stand-in for the mode FSM's
+        operator input: True asks to stand, False asks for nothing. The FSM
+        still gates on control_enabled + enable_dwell, so torque only flows once
+        the drives are genuinely up.
+        """
+        nonlocal clk, reached_enabled, frame, t_prev, cycle
         phase_start = time.perf_counter() - t0
         while (t := time.perf_counter() - t0) - phase_start < duration:
             dt = t - t_prev
-            t_prev = t 
+            t_prev = t
+            cycle += 1
             clk += PERIOD
             imu_frame = imu.read()
             state = se.get_state(frame, imu_frame, t, dt)
             frame_log.append(t, frame)  
-            state.standing = standing
-            desired_torque = pc.compute(state, t)
-            llo = llc.compute(state, desired_torque=desired_torque,control_enabled=ec.control_enabled(), dt=dt)
-            # only send non zero commands if standing is true, else send zeros, as even a small bias in measured torque can poison the low level controller.
-            if standing:
+            state.control_enabled = ec.control_enabled()
+            op = OperatorInput(standing_toggle=standing, hold_toggle=False,
+                               seq=cycle)
+            desired_torque = pc.compute(state, t, op, dt)
+            state.standing = pc.mode is Mode.STANDING
+            llo = llc.compute(state, desired_torque=desired_torque,
+                              control_enabled=ec.control_enabled(), dt=dt,
+                              actuate=pc.mode.actuate)
+            # only send non-zero commands when the MODE actuates, else zeros --
+            # even a small bias in measured torque can poison the low level.
+            if pc.mode.actuate:
                 drive_cmd = llc.to_drive_command(llo)
                 if DISABLE_ANKLE:
                     drive_cmd.ankle_velocity_counts = 0
@@ -109,7 +125,7 @@ def main():
             print("WARNING: failed to reach OPERATION_ENABLED")
 
         # set standing to True 
-        run(STANDING_DURATION, standing=True)
+        run(STANDING_DURATION, standing=False)
 
     except KeyboardInterrupt:
         print("terminated early")

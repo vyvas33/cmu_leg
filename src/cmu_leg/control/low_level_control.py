@@ -23,8 +23,8 @@ from cmu_leg.control.low_level.ankle import (
     AnkleTorqueController,
     AnkleVelocitySaturation,
 )
-from cmu_leg.types.state import ProsthesisState
-from cmu_leg.types.commands import TorqueDesired, LowLevelOutput, DriveCommand
+from cmu_leg.structures.state import ProsthesisState
+from cmu_leg.structures.commands import TorqueDesired, LowLevelOutput, DriveCommand
 import cmu_leg.config.params as params 
 
 
@@ -43,6 +43,7 @@ class LowLevelControl:
         self.ankle_velocity_saturation = AnkleVelocitySaturation()
 
         # edge detection + post-enable mute counter
+        self._prev_active = False
         self._prev_control_enabled = False
         self._post_enable_ticks = 0
 
@@ -84,7 +85,8 @@ class LowLevelControl:
                 )
 
     def compute(self, state: ProsthesisState, desired_torque: TorqueDesired,
-                control_enabled: bool, dt: float) -> LowLevelOutput:
+                control_enabled: bool, dt: float,
+                actuate: bool = True) -> LowLevelOutput:
 
         if not self._verified:
             raise NotImplementedError("Low Level Control not verified yet!")
@@ -92,16 +94,45 @@ class LowLevelControl:
         # edge detection. control_enabled is a hardware fact (the Elmos reaching
         # OPERATION_ENABLED), passed in by the loop from ec.control_enabled() —
         # not a supervisor flag on the state bus.
-        rising_edge = control_enabled and not self._prev_control_enabled
+        # `actuate` joins it: a mode that is not driving must not run the
+        # pipeline either. Otherwise the conditioning lowpass keeps integrating
+        # a joint-stop torque whose output is thrown away, and hands over a
+        # wound-up value the instant actuation begins. Concretely: with the leg
+        # straight the knee extension stop demands ~14 Nm (knee_angle_min_soft
+        # is 5 deg, so 0 deg is past it), and `not standing` makes that a hard
+        # floor -- across the 3 s between drive-enable and standing the filter
+        # converges there, then steps into the joint. Gating the pipeline on
+        # `active` removes the windup AND re-arms the startup mute, so control
+        # engages from a settled state.
+        active = control_enabled and actuate
+        active_edge = active and not self._prev_active
+        enable_edge = control_enabled and not self._prev_control_enabled
+        self._prev_active = active
         self._prev_control_enabled = control_enabled
 
-        if rising_edge:
+        # RESET on the actuate edge -- that is what clears the wound-up
+        # conditioning lowpass, so control always engages from zero.
+        if active_edge:
             self._reset_sub_blocks()
+        # MUTE only on the hardware enable edge, NOT on the actuate edge. The
+        # mute zeroes drive-facing output for a second; re-arming it when a
+        # policy starts would swallow the first half of standing's 2 s min-jerk
+        # ramp and the leg would snap to setpoint when it lifted. The dwell in
+        # ModeParams.enable_dwell is what covers the post-enable settle instead.
+        if enable_edge:
             self._post_enable_ticks = 0
+        # Counts ticks since the HARDWARE enable, not ticks of a running
+        # pipeline -- so it advances through the INITIALIZING dwell too and is
+        # already spent by the time a policy starts. Incremented before the
+        # early return below for exactly that reason: leaving it after meant the
+        # mute was still fully in force at the first actuating tick and ate the
+        # front of standing's ramp.
+        self._post_enable_ticks += 1
 
-        # disabled: do NOT run the pipeline, emit zeros to every field
-        # (more conservative than Simulink, which holds the last value)
-        if not control_enabled:
+        # not driving: do NOT run the pipeline, emit zeros to every field
+        # (more conservative than Simulink, which holds the last value). Zeros
+        # mean target-velocity-zero at the drives, i.e. HOLD -- see Mode.
+        if not active:
             return LowLevelOutput()
 
         # enabled: run the full pipeline
@@ -114,8 +145,6 @@ class LowLevelControl:
         ankle_torque_commanded = self.ankle_torque_conditioning.compute(state, desired_torque)
         ankle_velocity_desired, ankle_motor_torque_ff_desired = self.ankle_torque_controller.compute(state, ankle_torque_commanded, dt)
         ankle_velocity_commanded, ankle_motor_torque_ff = self.ankle_velocity_saturation.compute(state, ankle_velocity_desired, ankle_motor_torque_ff_desired)
-
-        self._post_enable_ticks += 1
 
         # startup mute window: pipeline state advances (filters settle, BDs
         # build history) but drive-facing fields are forced to zero. Logging

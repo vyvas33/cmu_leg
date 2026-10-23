@@ -21,12 +21,12 @@ uv sync
 
 ### Control
 
-- In `src/cmu_leg/config/params.py`, set `RUNTIME.arm_motion = True` to walk with the leg on. With it `False` the drives enable and hold, but nothing moves.
+- In `src/cmu_leg/config/params.py`, set `RUNTIME.arm_motion = True` to walk with the leg on. With it `False` the drives enable and hold, but nothing moves, so you can put on the leg.
 - From the repo root (needs sudo for EtherCAT and real-time priority):
 ```bash
     sudo .venv/bin/python -m cmu_leg.runtime.launch
 ```
-- The leg stands once the drives are enabled. At `RUNTIME.bench_walk_at` (20 s) it switches to walking as soon as the foot is unloaded. Ctrl+C to stop; logs go to `output/`.
+- The leg stands once the drives are enabled. At `RUNTIME.bench_walk_at` (20 s) it switches to walking as soon as the foot is unloaded. Ctrl+C to stop. Logs go to `output/`.
 
 ### Treadmill
 

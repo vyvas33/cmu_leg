@@ -11,20 +11,28 @@ uv sync
 ```
 
 ## Running 
-### Connecting to Jetson 
+### Connecting
 
-- Power on the Jetson
-- You should now see a WiFi network named CMULeg. Connect to it. The password is pasted on the Jetson.
-- SSH into Jetson on Code/Terminal using this command, password is same as the WiFi.
-    ```bash
-    ssh -v cmuleg@10.42.0.1
-    ```
-- You are in
-
-### Mobile Hotspot 
-Alternatively, you can also use your smartphone's hotspot to connect. 
-- To sync outputs run: 
+- Connect the Jetson (and the treadmill PC, if using the treadmill) to the mobile hotspot.
+- To sync outputs to your laptop run: 
 ```bash 
     rsync -avz cmuleg@172.20.10.4:~/cmu_leg/output/ ./output/ 
 ```
 
+### Control
+
+- In `src/cmu_leg/config/params.py`, set `RUNTIME.arm_motion = True` to walk with the leg on. With it `False` the drives enable and hold, but nothing moves.
+- From the repo root (needs sudo for EtherCAT and real-time priority):
+```bash
+    sudo .venv/bin/python -m cmu_leg.runtime.launch
+```
+- The leg stands once the drives are enabled. At `RUNTIME.bench_walk_at` (20 s) it switches to walking as soon as the foot is unloaded. Ctrl+C to stop; logs go to `output/`.
+
+### Treadmill
+
+- On the treadmill PC, open the Treadmill Control Panel. In Settings, enable Remote TCP/IP Control and uncheck "Listen on 127.0.0.1 Only". Hit "Ready for Remote Control" on the dashboard.
+- On the Jetson:
+```bash
+    uv run python -m cmu_leg.runtime.treadmill --host <PC_IP> --speed 0.8 --acc 0.5
+```
+- The belts start after 10 s. Ctrl+C to stop.

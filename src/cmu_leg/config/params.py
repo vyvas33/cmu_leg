@@ -1,6 +1,5 @@
-"""Controller parameters, ported from baseline_controller/params.m and its .mat
-files (sys_id_*, ankle_stiffness_params, spring_zero_positions, encoder_counts_
-to_rad_polys, ankle_angle_offset, dynamic_params).
+"""
+Controller parameters
 
 Provenance, derivations and the reasoning behind individual values are in
 docs/params.md. Keep this file to one line per field and put the prose there.
@@ -44,19 +43,11 @@ class RuntimeParams:
 
     low_warmup_s: float = 5.0           # s from the SYNCED ORIGIN to ec.enable
 
-    # One switch for the two gates that let the leg move, so arming a bench run
-    # is a single edit. Not `enable_drives`: the CiA-402 enable walk runs either
-    # way, and what these gate is MOTION. It is a dataclass field like the rest:
-    # dropping the annotation makes it a plain class attribute, which still
-    # READS correctly but leaves the gates out of fields() and so out of
-    # launch.py's asdict config dump -- the run record would not say whether the
-    # motors were live. Committed False; flipping it is a deliberate act at the
-    # bench. allow_motion False with drive_knee True is the dry run: nothing
-    # moves, but the torque trip still watches what the controller would drive.
+    ## Set arm_motion to False if you want to wear the leg. Set arm_motion to True is you are ready to walk with the prosthesis on. 
     arm_motion: bool = False
     allow_motion: bool = arm_motion     # gate on MOTION; False still enables + holds
     drive_knee: bool = arm_motion       # per-joint wire gate; False = drive holds
-    drive_ankle: bool = False           # off while its torque loop rings near 42 Hz
+    drive_ankle: bool = False           # off by choice, not by fault; see docs/params.md
     knee_torque_trip: float = 120.0      # de-energize + stop if |knee motor torque ff| exceeds [Nm]
     ankle_torque_trip: float = 120.0     # same, ankle [Nm]
     enable_grace_s: float = 2.0         # warn if not OPERATION_ENABLED this long after enable [s]
@@ -174,6 +165,16 @@ class IMUParams:
     lpf_cutoff_hz: int         # anti-alias; keep <= 0.4 * stream_rate
     acc_range_g: int           # +-g
     gyro_range_dps: int        # +-dps
+
+
+# Bertec treadmill, driven over the Control Panel's Remote TCP/IP Control socket
+# on the Windows PC. Needs "Listen on 127.0.0.1 Only" unchecked to reach it from
+# the Jetson.
+@dataclass(frozen=True, slots=True)
+class TreadmillParams:
+    host: str                  # Control Panel PC's LAN IP
+    port: int                  # Control Panel listens on 4000
+    timeout_s: float           # connect / send timeout
 
 
 # Encoder error correction (encoder_counts_to_rad_polys.mat). Normalize counts,
@@ -314,6 +315,12 @@ IMU = IMUParams(
     gyro_range_dps=2000,
 )
 
+TREADMILL = TreadmillParams(
+    host="",                     # set to the treadmill PC's IP before use
+    port=4000,
+    timeout_s=2.0,
+)
+
 # From utility_functions/encoder_counts_to_rad_polys.mat (Feb 2024) -- the set
 # paired with the Sep-2025 zero offsets. Polys, means and stds go together.
 ENCODER_CORRECTION = EncoderCorrection(
@@ -392,10 +399,10 @@ class ContactParams:
     min_stance: float           # s, cannot leave stance before this
     min_swing: float            # s, cannot leave swing before this
 
-
+# might require some tuning based on how "well" the human is walking (for instance, putting enough weight on the leg in stance), but lower thresholds could be bad as contact sensing could be noisy (false contacts).
 CONTACT = ContactParams(
     toe_threshold=70.0,
-    heel_threshold=50.0,
+    heel_threshold=50.0, 
     baseline_tau=2.0,
     min_stance=0.30,
     min_swing=0.12,      # measured no benefit; kept as a knob
@@ -404,7 +411,7 @@ CONTACT = ContactParams(
 
 # Min-jerk swing (MinJerkSwing), from `minjerk swing Control/Min Jerk Swing` in
 # nm_nn_swing. Two quintics per joint in swing-relative time, solved once at
-# toe-off. Values from nm_nn.m 2.5 and params.m, NOT minjerk_params.m.
+# toe-off. Values from nm_nn.m 2.5 and params.m.
 @dataclass(frozen=True, slots=True)
 class MJSwingParams:
     swing_to_stance_ratio: float             # T = clamp(ratio * prev_stance, min, max)

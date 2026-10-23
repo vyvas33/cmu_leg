@@ -74,8 +74,13 @@ leg is stiff, not limp, and nothing moves. (Was `command_motors`, which read as
 **`drive_knee` / `drive_ankle`** — per-joint gate applied at the wire in
 `low_level.run()`. False sends a zero `DriveCommand` for that joint, so the drive
 holds it rather than leaving it free. Everything upstream still runs and still
-logs, so the joint's commanded torque stays visible. Ankle is off while its
-torque loop limit-cycles near 42 Hz.
+logs, so the joint's commanded torque stays visible.
+
+The ankle is off by choice, not because it misbehaves. The 42 Hz standing
+oscillation was a coupled knee+ankle+rig mode, not an ankle torque-loop limit
+cycle, and the ankle has since run fine on hardware. It stays gated only
+because the controllers being brought up are knee-only, and a policy that
+commands `ankle_desired=0.0` would leave the foot limp rather than held.
 
 **`bench_walk_at`** — scripted operator schedule, in seconds from the synced
 origin. The control process is spawned, and multiprocessing replaces a child's

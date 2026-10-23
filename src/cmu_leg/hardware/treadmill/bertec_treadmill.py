@@ -25,11 +25,11 @@ tm.set_speeds(0.5, 0.5)             # m/s, right then left
 tm.stop()
 tm.close()                          # does NOT stop the belts; stop() first
 
-Verified on hardware (Oct 2026): status read with belts run by hand, and a
-0.2 m/s command at 0.3 m/s^2 accel. Not yet checked: which belt is right vs
-left, and the sign of "forward".
+Verified on hardware (Oct 2026): status read with belts run by hand, a
+0.2 m/s command at 0.3 m/s^2 accel, right/left belt mapping, and positive
+speed = person walking forward.
 
-vkalva, October 2026
+vkalva, Claude, October 2026
 """
 import socket
 import struct

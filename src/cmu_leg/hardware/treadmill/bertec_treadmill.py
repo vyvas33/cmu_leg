@@ -8,12 +8,13 @@ Like imu_io, read() returns SI units (m/s, deg); the wire carries mm/s and
 hundredths of a degree. Talks only to the Control Panel socket, NOT to
 BertecDevice.dll (the separate force-plate SDK).
 
-Requirements on the treadmill PC:
-  - Bertec Treadmill Control Panel running
-  - Settings > Remote TCP/IP Control enabled, then the enable button on the
-    main Control Panel window clicked
-  - "Listen on 127.0.0.1 Only" unchecked, and port 4000 open in the Windows
-    firewall, so the Jetson can reach it
+Setup, on the prosthesis computer (Windows):
+  1. Open the Treadmill Control Panel (Bertec treadmill logo).
+  2. Settings: enable Remote TCP/IP Control and uncheck "Listen on 127.0.0.1
+     Only".
+  3. Hit "Ready for Remote Control" on the dashboard. Without it status still
+     streams but commands are silently ignored.
+  4. Then run the code on the Jetson (see bertec_test.py).
 
 Typical Usage:
 
@@ -24,8 +25,9 @@ tm.set_speeds(0.5, 0.5)             # m/s, right then left
 tm.stop()
 tm.close()                          # does NOT stop the belts; stop() first
 
-UNVERIFIED AGAINST HARDWARE. Command side matches the MATLAB byte-for-byte;
-the status side's big-endian int16s are inferred from MATLAB's tcpip default.
+Verified on hardware (Oct 2026): status read with belts run by hand, and a
+0.2 m/s command at 0.3 m/s^2 accel. Not yet checked: which belt is right vs
+left, and the sign of "forward".
 
 vkalva, October 2026
 """

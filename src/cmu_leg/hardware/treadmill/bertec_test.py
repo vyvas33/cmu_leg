@@ -1,6 +1,14 @@
 """
 Bring-up test for bertec_treadmill.py, run from the Jetson.
 
+Setup, on the prosthesis computer (Windows):
+  1. Open the Treadmill Control Panel (Bertec treadmill logo).
+  2. Settings: enable Remote TCP/IP Control and uncheck "Listen on 127.0.0.1
+     Only".
+  3. Hit "Ready for Remote Control" on the dashboard. Without it the
+     read-only stage still works but --move does nothing.
+  4. Then run this on the Jetson:
+
   uv run python -m cmu_leg.hardware.treadmill.bertec_test [HOST]           # read-only
   uv run python -m cmu_leg.hardware.treadmill.bertec_test [HOST] --move    # + 0.2 m/s for 3 s
 

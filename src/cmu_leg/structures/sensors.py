@@ -63,3 +63,14 @@ class EncoderReadings:
     ankle_spring_angle: float = 0.0
     ankle_angle: float = 0.0
     ankle_torque: float = 0.0
+
+@dataclass(slots=True)
+class TreadmillFrame:
+    """SI-unit belt state from the Bertec Control Panel's status packet.
+    Accelerations are not reported. Freshness flag as in IMUFrame.
+    """
+    right_speed: float = 0.0   # m/s
+    left_speed: float = 0.0    # m/s
+    incline: float = 0.0       # deg
+    time: float = 0.0          # host time.monotonic() the packet was read
+    fresh: bool = False        # True if a new packet arrived since the previous read()

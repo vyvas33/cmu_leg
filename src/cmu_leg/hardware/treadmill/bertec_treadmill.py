@@ -29,7 +29,7 @@ Verified on hardware (Oct 2026): status read with belts run by hand, and a
 0.2 m/s command at 0.3 m/s^2 accel. Not yet checked: which belt is right vs
 left, and the sign of "forward".
 
-vkalva, October 2026
+vkalva, Claude, October 2026
 """
 import socket
 import struct

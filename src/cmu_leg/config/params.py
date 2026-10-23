@@ -316,7 +316,7 @@ IMU = IMUParams(
 )
 
 TREADMILL = TreadmillParams(
-    host="",                     # set to the treadmill PC's IP before use
+    host="172.20.10.2",                     # set to the treadmill PC's IP before use
     port=4000,
     timeout_s=2.0,
 )

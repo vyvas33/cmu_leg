@@ -1,13 +1,14 @@
 """
 Run the Bertec treadmill at a set speed until Ctrl+C, then ramp it to a stop.
+The belts start START_IN_S seconds after launch, to get on the treadmill.
 
   uv run python -m cmu_leg.runtime.treadmill                     # 0.8 m/s, 0.5 m/s^2
   uv run python -m cmu_leg.runtime.treadmill --speed 1.0 --acc 0.3
   uv run python -m cmu_leg.runtime.treadmill --host <PC_IP>      # default params.TREADMILL.host
 
 Both belts run at the same speed; positive = person walking forward. --acc is
-used for both the ramp up and the ramp down. Re-run with a new --speed to
-change speed: the new command takes over from the current belt speed.
+used for both the ramp up and the ramp down. To change speed, Ctrl+C and
+re-run. Ctrl+C during the countdown aborts without sending anything.
 
 Control Panel setup (Ready for Remote Control, etc.) is in
 hardware/treadmill/bertec_treadmill.py. Closing the connection does NOT stop
@@ -16,10 +17,12 @@ hard (kill -9, power loss, Wi-Fi drop) the belts keep running. Keep the E-stop
 in hand.
 """
 import argparse
+import math
 import time
 
 from cmu_leg.hardware.treadmill.bertec_treadmill import BertecTreadmill
 
+START_IN_S = 10.0          # s from launch to the belts starting
 PRINT_PERIOD_S = 0.5
 STOP_TIMEOUT_S = 15.0      # longest wait for the belts to read zero after stop
 MAX_SPEED = 1.5            # m/s, refuse anything faster (catches typos); raise deliberately
@@ -27,6 +30,14 @@ MAX_SPEED = 1.5            # m/s, refuse anything faster (catches typos); raise 
 
 def _show(f) -> None:
     print(f"right {f.right_speed:+.3f} m/s | left {f.left_speed:+.3f} m/s", end="\r")
+
+
+def _countdown(seconds: float) -> None:
+    end = time.monotonic() + seconds
+    while (left := end - time.monotonic()) > 0:
+        print(f"Starting in {math.ceil(left):2d} s  (Ctrl+C to abort)", end="\r")
+        time.sleep(min(0.1, left))
+    print()
 
 
 def main():
@@ -51,8 +62,15 @@ def main():
                        "running with Remote TCP/IP Control enabled?\n")
 
     try:
-        print(f"Connected to {tm.host}:{tm.port}. Ramping to {args.speed:.2f} m/s "
-              f"at {args.acc:.2f} m/s^2. Ctrl+C to stop.")
+        print(f"Connected to {tm.host}:{tm.port}. Will ramp to {args.speed:.2f} m/s "
+              f"at {args.acc:.2f} m/s^2.")
+        try:
+            _countdown(START_IN_S)
+        except KeyboardInterrupt:
+            print("\nAborted before start; nothing sent.")
+            return
+
+        print("Starting. Ctrl+C to stop.")
         try:
             tm.set_speeds(args.speed, args.speed, acc_r=args.acc, acc_l=args.acc)
             while True:

@@ -10,14 +10,14 @@ controller latches a trajectory out of here and tracks it with a pid.
 
 update() just fills the history buffer, so it has to keep running through
 stance -- the network needs 100 ms of warm history at toe-off, and the baseline
-starts it a few hundred ms before that. NMNN owns those calls.
+starts it a few hundred ms before that. NMNPC owns those calls.
 
 The network works in human joint space at both ends: it was trained on
 able-bodied gait, so the knee angle going in is remapped to a human leg by
 _leg_to_human, and the prediction comes back through _human_to_leg.
 
 The knee channel is the commanded knee, not the measured one: in stance that
-is the measured angle (NMNN passes it), in swing it is the controller's own
+is the measured angle (NMNPC passes it), in swing it is the controller's own
 output from the previous tick. So during swing the predictor runs on its own
 past output for that one channel, while the hip and position channels stay
 real.

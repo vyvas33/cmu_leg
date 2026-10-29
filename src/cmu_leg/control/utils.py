@@ -87,19 +87,30 @@ class BackwardDifference:
         return y
 
 class PID:
-    """Discrete pid: forward Euler on both the integrator and the derivative
-    filter, filter coefficient n, no output saturation and no anti-windup.
+    """Discrete pid with a filtered derivative, as Simulink's PID block.
 
-        u   = kp*e + xi + n*(kd*e - xf)      <- pre-update states
-        xi += dt * ki * e
-        xf += dt * n*(kd*e - xf)
+    Same three terms as a textbook pid, with two differences worth knowing
+    before reading compute():
 
-    Taking the output from the pre-update states is what makes it forward Euler;
-    updating first would be backward Euler and shift the effective gains by a
-    tick.
+    The D term does not difference the error. A raw (e - e_prev)/dt at 1 kHz
+    multiplies noise by 1/dt, so one encoder count of jitter becomes a large
+    torque. This realises kd*s/(1 + s/n) instead: `_d_state` lags kd*error
+    through a first-order filter, and the term is how far the error has moved
+    from that lagged copy. Gain is capped at kd*n rather than kd/dt, and n is
+    the derivative bandwidth in rad/s.
 
-    The filter recursion realises kd*s/(1 + s/n), so xf tracks the derivative
-    through a first-order lag and n is the derivative bandwidth in rad/s.
+    The gains live in the states. `_i_state` is ki*integral, not the integral,
+    and `_d_state` carries kd -- which is why neither gain appears again in
+    the output line.
+
+        d_term    = n * (kd*e - _d_state)
+        u         = kp*e + _i_state + d_term        <- pre-update states
+        _i_state += dt * ki * e
+        _d_state += dt * d_term
+
+    Taking the output from the pre-update states is what makes it forward
+    Euler; updating first would be backward Euler and shift the effective
+    gains by a tick.
 
     `error` is setpoint minus measurement, so the d term acts on the error and
     responds to a moving setpoint. Damping the measurement instead brakes
@@ -107,8 +118,9 @@ class PID:
 
     No anti-windup unless `i_limit` is given, matching the baseline.
 
-    dt is required and clamped to [COMMON.dt_min, COMMON.dt_max], same reasoning
-    as BackwardDifference: a stalled tick must not integrate as one big step.
+    dt is required and clamped to [COMMON.dt_min, COMMON.dt_max], same
+    reasoning as BackwardDifference: a stalled tick must not integrate as one
+    big step.
     """
 
     def __init__(self, kp: float, ki: float, kd: float, n: float,
@@ -125,8 +137,8 @@ class PID:
         # the controller can sit on a standing error, since the integral is
         # otherwise unbounded.
         self._i_limit = i_limit
-        self._xi = 0.0
-        self._xf = 0.0
+        self._i_state = 0.0      # ki * integral of the error
+        self._d_state = 0.0      # lagged copy of kd * error
 
     def reset(self, error: float = 0.0) -> None:
         """Zero the integrator and seed the derivative filter from `error`
@@ -134,17 +146,33 @@ class PID:
         contributes no d term. Call on entry into the phase this pid serves,
         so nothing carries across from the previous one. Returns None.
         """
-        self._xi = 0.0
-        self._xf = self._kd * error
+        self._i_state = 0.0
+        self._d_state = self._kd * error
+
+    def resume(self, error: float) -> None:
+        """Seed the derivative filter from `error` without touching the
+        integrator. Call on the first compute() after ticks where this pid was
+        not called at all, so the d term does not read the gap as a step.
+        Returns None.
+        """
+        self._d_state = self._kd * error
 
     def compute(self, error: float, dt: float) -> float:
+        """Controller output for one tick, `error` = setpoint - measurement."""
         dt = min(max(dt, self._dt_min), self._dt_max)
-        d_out = self._n * (self._kd * error - self._xf)
-        u = self._kp * error + self._xi + d_out
-        self._xi += dt * self._ki * error
+
+        # filtered derivative: how far the error has moved from its own
+        # lagged copy, which is a rate without 1/dt's noise gain
+        d_term = self._n * (self._kd * error - self._d_state)
+
+        # output uses the states as they stand, before this tick advances them
+        u = self._kp * error + self._i_state + d_term
+
+        self._i_state += dt * self._ki * error
         if self._i_limit is not None:
-            self._xi = min(max(self._xi, -self._i_limit), self._i_limit)
-        self._xf += dt * d_out
+            self._i_state = min(max(self._i_state, -self._i_limit),
+                                self._i_limit)
+        self._d_state += dt * d_term
         return u
 
 

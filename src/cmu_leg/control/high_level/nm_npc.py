@@ -35,7 +35,7 @@ HIP_ANGLE_CUTOFF = 50.0     # Hz
 HIP_VEL_CUTOFF = 25.0       # Hz
 
 
-class NMNN(TorqueController):
+class NMNPC(TorqueController):
     """Neuromuscular stance + neural-predictive swing, knee only."""
 
     _verified = False
@@ -68,6 +68,9 @@ class NMNN(TorqueController):
         self._vel = 0.0
         self._accel = 0.0
         self._t_prev = 0.0
+        # the pid is not called in stance, nor while min-jerk holds the knee,
+        # so its derivative filter goes stale across those gaps
+        self._pid_gapped = True
 
     def reset(self, state: ProsthesisState, time: float) -> None:
         """Entered from the mode FSM, which hands over unloaded, so the gait
@@ -86,6 +89,7 @@ class NMNN(TorqueController):
         self._knee_accel.reset(0.0)
         self._vel = self._accel = 0.0
         self._t_prev = time - self._dt
+        self._pid_gapped = True
 
     @property
     def in_stance(self) -> bool:
@@ -140,6 +144,7 @@ class NMNN(TorqueController):
             self._vel = self._accel = 0.0
             self._knee_vel.reset(self.knee_desired)
             self._knee_accel.reset(0.0)
+            self._pid_gapped = True
             return self._stance_ctrl.compute(state, time)
 
         # min-jerk runs every swing tick: it owns the ankle, and its knee is
@@ -147,12 +152,14 @@ class NMNN(TorqueController):
         mj = self._swing_ctrl.compute(state, time)
         if not self.armed:
             self._chart.reset()
+            self._pid_gapped = True
             return mj
 
         phase = self._chart.update(True, state.standing, self.knee_desired,
                                    hip_angle, state.hip_pos_x,
                                    self._phase1.descending)
         if phase is Phase.IDLE:
+            self._pid_gapped = True
             return mj
 
         self._enter(phase, hip_vel, time)
@@ -164,6 +171,13 @@ class NMNN(TorqueController):
 
         error = clamp(knee, self._cfg.knee_min, self._cfg.knee_max) \
             - state.knee_angle
+        if self._pid_gapped:
+            # The baseline leaves the filter stale here, so its first swing
+            # tick differences a fresh error against one from the previous
+            # swing -- measured one-tick jumps of up to 62.7 Nm against a
+            # 0.36 Nm typical step. Seeding costs nothing on every other tick.
+            self._pid.resume(error)
+            self._pid_gapped = False
         return TorqueDesired(knee_desired=self._pid.compute(error, dt),
                              ankle_desired=mj.ankle_desired)
 

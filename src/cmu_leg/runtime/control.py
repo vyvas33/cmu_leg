@@ -34,6 +34,7 @@ from cmu_leg.hardware.imu_io import IMUInterface
 from cmu_leg.estimation.eskf.eskf import ESKF
 from cmu_leg.control.high_level_control import ProsthesisControl
 from cmu_leg.control.high_level.nm_npc import NMNPC
+from cmu_leg.control.high_level.nm_minjerk import NMMinJerk
 from cmu_leg.control.utils import BackwardDifference
 from cmu_leg.structures.state import ProsthesisState
 from cmu_leg.structures.commands import Mode
@@ -193,7 +194,7 @@ def run(dt, tmax, buffer, cmd_buf, stop_event, start_time,
         hip_accel = BackwardDifference()
         # Neuromuscular stance + neural-predictive knee swing. Min-jerk still
         # owns the ankle, and the knee too until the NN arms.
-        pc = ProsthesisControl(walking=NMNPC())
+        pc = ProsthesisControl(walking=NMMinJerk())
         # Operator intent. This process is spawned, so its stdin is devnull and
         # a keypress source could never come up here -- the schedule is the only
         # way to drive a run, and it is also the only deterministic one.

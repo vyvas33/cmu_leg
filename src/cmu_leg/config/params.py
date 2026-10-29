@@ -23,14 +23,14 @@ class RuntimeParams:
     ## Set arm_motion to True is you are ready to walk with the prosthesis on. 
 
     ########################
-    arm_motion: bool = False
+    arm_motion: bool = True
     ########################
 
     allow_motion: bool = arm_motion     # gate on MOTION; False still enables + holds
     drive_knee: bool = arm_motion       # per-joint wire gate; False = drive holds
     drive_ankle: bool = arm_motion     
     knee_torque_trip: float = 120.0      # de-energize + stop if |knee motor torque ff| exceeds [Nm]
-    ankle_torque_trip: float = 120.0     # same, ankle [Nm]
+    ankle_torque_trip: float = 150.0     # same, ankle [Nm]
     enable_grace_s: float = 2.0         # warn if not OPERATION_ENABLED this long after enable [s]
     shutdown_s: float = 1.0             # disable-ramp duration on teardown [s]
     max_stale_ticks: int = 5            # B3 watchdog: stale command -> safe zero
@@ -333,7 +333,7 @@ TREADMILL = TreadmillParams(
     host="172.20.10.2",                     # set to the treadmill PC's IP before use
     port=4000,
     timeout_s=2.0,
-    enabled=False,
+    enabled=True,
     speed=0.8,
     acc=0.5,
     stop_acc=1.5,

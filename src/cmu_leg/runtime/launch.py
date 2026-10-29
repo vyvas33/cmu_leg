@@ -27,9 +27,11 @@ Startup handshake:
      origin without letting the bus go silent. No Barrier: control is the sole
      stamper now that it's the only other process.
 
-The parent does not run a realtime loop and does not log; each child logs its own
-trace into the shared run_dir. The parent monitors liveness and, on Ctrl-C /
-SIGTERM / a child fault (stop_event), terminates everything gracefully.
+The parent does not run a realtime loop. It monitors liveness and, on Ctrl-C /
+SIGTERM / a child fault (stop_event), terminates everything gracefully. Each
+child logs its own trace into the shared run_dir; the parent logs only the
+treadmill, which is the one device it owns (see runtime/treadmill.py for why the
+belts cannot live in the control process).
 
 Run:  uv run python -m cmu_leg.runtime.launch
 """
@@ -45,6 +47,7 @@ from time import perf_counter
 from cmu_leg.runtime.buffer import StateBuffer, CommandBuffer
 from cmu_leg.runtime.guard import ExIntGuard
 from cmu_leg.runtime import low_level, control
+from cmu_leg.runtime.treadmill import BeltSupervisor
 from cmu_leg.utility.utils import make_run_dir
 import cmu_leg.config.params as params
 
@@ -117,8 +120,17 @@ def main():
 
     procs = []
 
+    # The belts, slaved to this run. Connecting BEFORE anything is spawned means
+    # a wrong host or a Control Panel that is not listening aborts while the leg
+    # is still cold. A no-op unless TREADMILL.enabled and RUNTIME.arm_motion.
+    belt = BeltSupervisor(run_dir=run_dir)
+    belt.connect()
+
     def terminate():
         """Set the stop flag and join the children; force-kill any straggler."""
+        # Belts FIRST. The joins below take up to 5 s per child, and a belt
+        # should not be running through them.
+        belt.shutdown()
         stop_event.set()
         for p in procs:
             p.join(timeout=5.0)
@@ -175,6 +187,9 @@ def main():
         # deadline has to cover the wait as well as the run.
         deadline = t0 + rt.max_arm_wait_s + rt.tmax + 1.0
         while any(p.is_alive() for p in procs) and perf_counter() < deadline:
+            # The belt supervisor rides this loop: 0.5 s is the right cadence for
+            # it, and `t` is control's origin so its log joins the others on t.
+            belt.step(perf_counter() - t0, b3.latest(), b1.latest())
             if stop_event.wait(timeout=0.5):
                 break
 

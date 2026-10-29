@@ -17,7 +17,7 @@ embedded signalNames, plot_gait_data.m, and a gravity-magnitude check:
     time [s] ...................... 107
 
 Run:  uv run python -m cmu_leg.tests.eskf_replay_validation
-Writes eskf_replay_validation.png next to this file.
+Writes plots/eskf_replay_validation.png.
 """
 from pathlib import Path
 
@@ -27,13 +27,14 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+from cmu_leg.tests import plot_path
 from cmu_leg.structures.sensors import IMUFrame
 from cmu_leg.structures.state import ProsthesisState
 from cmu_leg.estimation.eskf.eskf import ESKF, R_BODY_SENSOR_FO, _PERM_TH
 
 HERE = Path(__file__).parent
 MAT = HERE / "data" / "gaitData20251015_test7_NN_vicon.mat"
-PNG = HERE / "eskf_replay_validation.png"
+PNG = plot_path("eskf_replay_validation.png")
 
 COL = dict(hip=0, thigh_gyro=[42, 43, 44], thigh_acc=[45, 46, 47],
            foot_acc=[48, 49, 50], foot_gyro=[51, 52, 53],

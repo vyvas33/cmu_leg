@@ -13,9 +13,10 @@ Everything here is a source of that same pair. The mode FSM consumes
 OperatorInput and cannot tell them apart, so swapping sources never touches
 control logic:
 
-  TimedOperator     scripted, a pure function of t. Deterministic, so this is
-                    what replay harnesses and automated tests use. Also the
-                    drop-in for the current `state.standing = t > warmup`.
+  TimedOperator     scripted. Deterministic -- given the mode trace, which is
+                    what replay harnesses and automated tests need -- so this is
+                    what they use. Also the drop-in for the old
+                    `state.standing = t > warmup`.
   TerminalOperator  keypresses, for live bench work.
 
 `seq` increments on every read so the consumer can detect a source that has
@@ -30,6 +31,8 @@ toe-off of its own.
 """
 
 from dataclasses import dataclass
+
+from cmu_leg.structures.commands import Mode
 
 
 @dataclass(frozen=True)
@@ -59,9 +62,14 @@ class OperatorInput:
 
 
 class OperatorSource:
-    """Base class. `read(t)` is called once per control tick and must not block."""
+    """Base class. `read()` is called once per control tick and must not block.
 
-    def read(self, t: float) -> OperatorInput:
+    `mode` is the mode FSM's state as of the previous tick (the operator is read
+    before the FSM advances). A source that schedules against what the leg is
+    doing needs it; one that is a pure function of t ignores it.
+    """
+
+    def read(self, t: float, mode: Mode | None = None) -> OperatorInput:
         raise NotImplementedError
 
     def close(self) -> None:
@@ -78,8 +86,12 @@ class TimedOperator(OperatorSource):
         stand_at: request standing from this time on [s]. Defaults to 0 because
             standing is the resting request; the drives, not this, decide when
             it can actually begin.
-        walk_at: drop standing_toggle at this time, arming standing -> walking
-            (which still needs the leg unloaded). None = never walk.
+        walk_at: drop standing_toggle at this absolute time, arming standing ->
+            walking (which still needs the leg unloaded). None = never.
+        walk_after_standing: the same, but measured from the FIRST tick `mode`
+            is STANDING, so it cannot fire before standing exists and a slow
+            enable walk slides it instead of eating it. Needs `mode` passed to
+            read(); this is what the runtime uses. None = never.
         hold_at: raise hold_toggle at this time. None = never.
         swing_at: times to request a swing. This is the scripted stand-in for
             the space key, and it is what a spawned process has to use --
@@ -89,20 +101,31 @@ class TimedOperator(OperatorSource):
     """
 
     def __init__(self, stand_at: float = 0.0, walk_at: float | None = None,
+                 walk_after_standing: float | None = None,
                  hold_at: float | None = None,
                  swing_at: tuple[float, ...] = (),
                  swing_duration: float = 0.6):
         self._stand_at = stand_at
         self._walk_at = walk_at
+        self._walk_after_standing = walk_after_standing
         self._hold_at = hold_at
         self._swing_at = tuple(sorted(swing_at))
         self._swing_duration = swing_duration
         self._seq = 0
+        self._t_standing = None   # first STANDING tick; latched once
 
-    def read(self, t: float) -> OperatorInput:
+    def read(self, t: float, mode: Mode | None = None) -> OperatorInput:
         self._seq += 1
         standing = t >= self._stand_at
         if self._walk_at is not None and t >= self._walk_at:
+            standing = False
+        # Latch the FIRST entry, not the current mode: this toggle feeds the FSM
+        # that produces `mode`, so tracking it would re-arm a fresh delay every
+        # time the leg fell back from WALKING to STANDING.
+        if mode is Mode.STANDING and self._t_standing is None:
+            self._t_standing = t
+        if (self._walk_after_standing is not None and self._t_standing is not None
+                and t - self._t_standing >= self._walk_after_standing):
             standing = False
         hold = self._hold_at is not None and t >= self._hold_at
         # Counting elapsed entries keeps swing_seq monotonic without carrying
@@ -186,7 +209,7 @@ class TerminalOperator(OperatorSource):
                 self._swing_duration = round(self._swing_duration + step, 2)
                 print(f"[operator] swing duration {self._swing_duration:.2f} s")
 
-    def read(self, t: float) -> OperatorInput:
+    def read(self, t: float, mode: Mode | None = None) -> OperatorInput:
         self._seq += 1
         return OperatorInput(self._standing, self._hold, self._seq,
                              self._swing_seq, self._swing_duration)

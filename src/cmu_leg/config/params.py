@@ -7,6 +7,36 @@ docs/params.md. Keep this file to one line per field and put the prose there.
 from dataclasses import dataclass
 from math import pi, acos
 
+# Multiprocess runtime (runtime/launch.py + low_level.py + control.py).
+# Orchestration and safety knobs; loop periods derive from CommonParams.
+@dataclass(frozen=True, slots=True)
+class RuntimeParams:
+    tmax: float = 240.0                 # s, from the FIRST ACTUATING TICK, not t0
+    max_arm_wait_s: float = 120.0       # s, ceiling on waiting for that tick
+    hw_init_timeout: float = 5.0        # max wait for low-level EtherCAT init [s]
+    cores: tuple[int, int] = (2, 3)     # CPU affinity (low-level, control); Linux only
+    rt_priority: tuple[int, int] = (80, 70)   # SCHED_FIFO; low-level outranks control
+
+    low_warmup_s: float = 5.0           # s from the SYNCED ORIGIN to ec.enable
+
+    ## Set arm_motion to False if you want to wear the leg. 
+    ## Set arm_motion to True is you are ready to walk with the prosthesis on. 
+
+    ########################
+    arm_motion: bool = False
+    ########################
+
+    allow_motion: bool = arm_motion     # gate on MOTION; False still enables + holds
+    drive_knee: bool = arm_motion       # per-joint wire gate; False = drive holds
+    drive_ankle: bool = arm_motion     
+    knee_torque_trip: float = 120.0      # de-energize + stop if |knee motor torque ff| exceeds [Nm]
+    ankle_torque_trip: float = 120.0     # same, ankle [Nm]
+    enable_grace_s: float = 2.0         # warn if not OPERATION_ENABLED this long after enable [s]
+    shutdown_s: float = 1.0             # disable-ramp duration on teardown [s]
+    max_stale_ticks: int = 5            # B3 watchdog: stale command -> safe zero
+    walk_after_standing_s: float | None = 3.0
+    bench_swing_at: tuple[float, ...] = ()      # () = no scripted swings
+    bench_swing_duration: float = 1.0   # s, before the MJSWING clamp
 
 # Common / shared
 @dataclass(frozen=True, slots=True)
@@ -29,37 +59,6 @@ class CommonParams:
 
     lowpass_cutoff: float = 25.0             # Hz, torque conditioning; unused so far
     lowpass_order: int = 2
-
-
-# Multiprocess runtime (runtime/launch.py + low_level.py + control.py).
-# Orchestration and safety knobs; loop periods derive from CommonParams.
-@dataclass(frozen=True, slots=True)
-class RuntimeParams:
-    tmax: float = 240.0                 # s, from the FIRST ACTUATING TICK, not t0
-    max_arm_wait_s: float = 120.0       # s, ceiling on waiting for that tick
-    hw_init_timeout: float = 5.0        # max wait for low-level EtherCAT init [s]
-    cores: tuple[int, int] = (2, 3)     # CPU affinity (low-level, control); Linux only
-    rt_priority: tuple[int, int] = (80, 70)   # SCHED_FIFO; low-level outranks control
-
-    low_warmup_s: float = 5.0           # s from the SYNCED ORIGIN to ec.enable
-
-    ## Set arm_motion to False if you want to wear the leg. Set arm_motion to True is you are ready to walk with the prosthesis on. 
-    arm_motion: bool = False
-    allow_motion: bool = arm_motion     # gate on MOTION; False still enables + holds
-    drive_knee: bool = arm_motion       # per-joint wire gate; False = drive holds
-    drive_ankle: bool = False           # off by choice, not by fault; see docs/params.md
-    knee_torque_trip: float = 120.0      # de-energize + stop if |knee motor torque ff| exceeds [Nm]
-    ankle_torque_trip: float = 120.0     # same, ankle [Nm]
-    enable_grace_s: float = 2.0         # warn if not OPERATION_ENABLED this long after enable [s]
-    shutdown_s: float = 1.0             # disable-ramp duration on teardown [s]
-    max_stale_ticks: int = 5            # B3 watchdog: stale command -> safe zero
-
-    # Scripted operator schedule [s from the synced origin]. The spawned control
-    # process has no tty, so TerminalOperator cannot run there and this is the
-    # only way to drive a run. bench_walk_at must fall after standing begins.
-    bench_walk_at: float | None = 20.0
-    bench_swing_at: tuple[float, ...] = ()      # () = no scripted swings
-    bench_swing_duration: float = 1.0   # s, before the MJSWING clamp
 
 
 # Knee
@@ -175,6 +174,21 @@ class TreadmillParams:
     host: str                  # Control Panel PC's LAN IP
     port: int                  # Control Panel listens on 4000
     timeout_s: float           # connect / send timeout
+
+    # Belt motion under runtime/launch.py. `enabled` is the deliberate
+    # per-session opt-in and RUNTIME.arm_motion is the veto -- the belts move
+    # only with both. Since require_contact defaults False there is no PHYSICAL
+    # precondition left, so `enabled` is the only thing between a bench run and
+    # the belts spinning up behind you. Put it back to False afterwards.
+    enabled: bool
+    speed: float               # m/s, both belts
+    acc: float                 # m/s^2, the planned ramp up and the planned stop
+    stop_acc: float            # m/s^2, fault stops; harder than acc
+    max_speed: float           # m/s, refuse a configured speed above this
+    countdown_s: float         # s from "standing settled" to the belts moving
+    require_contact: bool      # also need the prosthetic foot loaded to start
+    max_stale_passes: int      # supervisor passes with no b3.seq -> fault stop
+    stop_timeout_s: float      # longest wait for the belts to read zero
 
 
 # Encoder error correction (encoder_counts_to_rad_polys.mat). Normalize counts,
@@ -319,6 +333,15 @@ TREADMILL = TreadmillParams(
     host="172.20.10.2",                     # set to the treadmill PC's IP before use
     port=4000,
     timeout_s=2.0,
+    enabled=False,
+    speed=0.8,
+    acc=0.5,
+    stop_acc=1.5,
+    max_speed=1.5,
+    countdown_s=5.0,
+    require_contact=False,
+    max_stale_passes=2,
+    stop_timeout_s=15.0,
 )
 
 # From utility_functions/encoder_counts_to_rad_polys.mat (Feb 2024) -- the set

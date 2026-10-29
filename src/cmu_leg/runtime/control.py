@@ -37,7 +37,7 @@ from cmu_leg.control.high_level.nm_npc import NMNPC
 from cmu_leg.control.utils import BackwardDifference
 from cmu_leg.structures.state import ProsthesisState
 from cmu_leg.structures.commands import Mode
-from cmu_leg.runtime.operator import TerminalOperator, TimedOperator
+from cmu_leg.runtime.operator import TimedOperator
 from cmu_leg.runtime.buffer import StateBuffer, CommandBuffer
 from cmu_leg.runtime.guard import ExIntGuard
 from cmu_leg.utility.recorder import Recorder
@@ -179,8 +179,7 @@ def run(dt, tmax, buffer, cmd_buf, stop_event, start_time,
             for lg in (state_log, torque_log, timing_log, gait_log):
                 lg.save(run_dir)
             imu.close()
-            # TerminalOperator puts the tty in cbreak; without this the shell is
-            # left with no echo and no line buffering after every run.
+            # OperatorSource teardown; a no-op for the timed source.
             operator.close()
         if is_verbose:
             print(f"{pname}: terminated gracefully.")
@@ -195,18 +194,16 @@ def run(dt, tmax, buffer, cmd_buf, stop_event, start_time,
         # Neuromuscular stance + neural-predictive knee swing. Min-jerk still
         # owns the ankle, and the knee too until the NN arms.
         pc = ProsthesisControl(walking=NMNPC())
-        # Operator intent. TerminalOperator needs a tty; in the spawned control
-        # process stdin usually is not one, so it reports .available and we fall
-        # back to the scripted source -- which is also what any headless or
-        # replay run wants, because it is the only deterministic one.
-        operator = TerminalOperator()
-        if not operator.available:
-            operator = TimedOperator(walk_at=rt.bench_walk_at,
-                                     swing_at=rt.bench_swing_at,
-                                     swing_duration=rt.bench_swing_duration)
-            print(f"[{pname}] operator: timed  walk@{rt.bench_walk_at}s  "
-                  f"swings@{list(rt.bench_swing_at)}s "
-                  f"({rt.bench_swing_duration}s each)")
+        # Operator intent. This process is spawned, so its stdin is devnull and
+        # a keypress source could never come up here -- the schedule is the only
+        # way to drive a run, and it is also the only deterministic one.
+        operator = TimedOperator(walk_after_standing=rt.walk_after_standing_s,
+                                 swing_at=rt.bench_swing_at,
+                                 swing_duration=rt.bench_swing_duration)
+        print(f"[{pname}] operator: timed  "
+              f"walk@STANDING+{rt.walk_after_standing_s}s  "
+              f"swings@{list(rt.bench_swing_at)}s "
+              f"({rt.bench_swing_duration}s each)")
         state = ProsthesisState()   # this process's OWN local bus
 
         # tmax counts from the first ACTUATING tick, not from t0, so warmup
@@ -276,7 +273,9 @@ def run(dt, tmax, buffer, cmd_buf, stop_event, start_time,
             # --- mode FSM + high-level policy (co-located, no extra hop) -------
             # control OWNS the mode; the low level derives `actuate` and the
             # knee extension-stop suppression from it.
-            op = operator.read(t)
+            # pc.mode is last tick's (the FSM advances inside compute below),
+            # which is what the operator's standing-relative schedule wants.
+            op = operator.read(t, pc.mode)
             desired = pc.compute(state, t, op, dt_meas)   # TorqueDesired
             state.standing = pc.mode is Mode.STANDING     # for logging/consumers
             m4 = perf_counter()

@@ -35,7 +35,7 @@ split into ankle_angle vs ankle_spring_angle.
 Data + column map: see tests/impedance_stance_replay.py.
 
 Run:  uv run python -m cmu_leg.tests.nm_stance_replay
-Writes nm_stance_replay.png next to this file.
+Writes plots/nm_stance_replay.png.
 """
 from pathlib import Path
 
@@ -46,12 +46,13 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 import cmu_leg.control.high_level.walking.neuromuscular_stance as nms
+from cmu_leg.tests import plot_path
 from cmu_leg.control.high_level.walking.neuromuscular_stance import NeuromuscularStance
 from cmu_leg.structures.state import ProsthesisState
 
 HERE = Path(__file__).parent
 MAT = HERE / "data" / "gaitData20251015_test7_NN_vicon.mat"
-PNG = HERE / "nm_stance_replay.png"
+PNG = plot_path("nm_stance_replay.png")
 
 COL = dict(knee_ang=7, knee_vel=8, ankle_ang=18, ankle_vel=19, hip_ang=74,
            stance=29, post_knee=96, post_ankle=101, time=107)

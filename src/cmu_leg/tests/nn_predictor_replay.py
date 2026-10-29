@@ -40,7 +40,7 @@ Column maps (0-based).
   nntorque 23  knee_desired data store, the commanded knee
 
 Run:  uv run python -m cmu_leg.tests.nn_predictor_replay
-Writes nn_predictor_replay.png next to this file.
+Writes plots/nn_predictor_replay.png.
 """
 from dataclasses import replace
 from pathlib import Path
@@ -51,6 +51,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+from cmu_leg.tests import plot_path
 from cmu_leg.config.params import COMMON
 from cmu_leg.structures.state import ProsthesisState
 from cmu_leg.control.high_level.walking import retargeting
@@ -58,7 +59,7 @@ from cmu_leg.control.high_level.walking import nn_predictor as npx
 
 HERE = Path(__file__).parent
 MAT = HERE / "data" / "gaitData20251015_test7_NN_vicon.mat"
-PNG = HERE / "nn_predictor_replay.png"
+PNG = plot_path("nn_predictor_replay.png")
 
 BASE = dict(hip_angle=0, hip_x=58, hip_z_raw=60, knee_x=61, knee_z=63,
             hip_z_comp=86, time=107)

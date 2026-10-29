@@ -52,7 +52,7 @@ walk column map (0-based into scope_data.walk.data), from signalNames:
 Data + base column map: see tests/impedance_stance_replay.py.
 
 Run:  uv run python -m cmu_leg.tests.minjerk_swing_replay
-Writes minjerk_swing_replay.png next to this file.
+Writes plots/minjerk_swing_replay.png.
 """
 from dataclasses import replace
 from math import radians
@@ -64,6 +64,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+from cmu_leg.tests import plot_path
 from cmu_leg.control.high_level.walking.minjerk_swing import MinJerkSwing
 from cmu_leg.control.utils import Lowpass, clamp
 from cmu_leg.structures.state import ProsthesisState
@@ -71,7 +72,7 @@ from cmu_leg.config.params import MJSWING, COMMON
 
 HERE = Path(__file__).parent
 MAT = HERE / "data" / "gaitData20251015_test7_NN_vicon.mat"
-PNG = HERE / "minjerk_swing_replay.png"
+PNG = plot_path("minjerk_swing_replay.png")
 
 # The `Ankle Angle` subsystem emits six signals, giving two plausible
 # (angle, vel, accel) triples in the log:

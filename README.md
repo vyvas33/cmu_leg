@@ -26,7 +26,8 @@ uv sync
 ```bash
     sudo .venv/bin/python -m cmu_leg.runtime.launch
 ```
-- The leg stands once the drives are enabled. At `RUNTIME.bench_walk_at` (20 s) it switches to walking as soon as the foot is unloaded. Ctrl+C to stop. Logs go to `output/`.
+- The leg stands once the drives are enabled. `RUNTIME.walk_after_standing_s` (3 s after standing) then arms walking, which begins as soon as the foot is unloaded. Ctrl+C to stop. Logs go to `output/`.
+- To drive the Bertec belts from the run itself, see the treadmill section of `src/cmu_leg/runtime/README.md`.
 
 ### Treadmill
 

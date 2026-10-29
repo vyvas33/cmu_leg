@@ -38,9 +38,8 @@ safety knobs that used to be scattered across those files.
 
 **`tmax`** — counted from the **first actuating tick**, the moment the mode FSM
 first reaches STANDING or WALKING, not from the synced origin. Warmup no longer
-eats into the run, and with `TerminalOperator` the start is not predictable at
-all, so a fixed window from t0 would give an arbitrary amount of usable data
-depending on how long the operator took.
+eats into the run: a fixed window from t0 would give an arbitrary amount of
+usable data depending on how long the drives took to enable.
 
 **`max_arm_wait_s`** — ceiling on the wait for that first actuating tick. If the
 operator never asks, or the drives never enable, the run ends here instead of
@@ -82,22 +81,65 @@ cycle, and the ankle has since run fine on hardware. It stays gated only
 because the controllers being brought up are knee-only, and a policy that
 commands `ankle_desired=0.0` would leave the foot limp rather than held.
 
-**`bench_walk_at`** — scripted operator schedule, in seconds from the synced
-origin. The control process is spawned, and multiprocessing replaces a child's
-stdin with devnull, so `TerminalOperator` can never come up there; the schedule
-is the only way to drive a run.
+**`walk_after_standing_s`** — when `standing_toggle` drops, measured as a
+**delta from the mode FSM reaching STANDING**, not from the synced origin. The
+control process is spawned, and multiprocessing replaces a child's stdin with
+devnull, so no keypress source can come up there; the schedule is the only way
+to drive a run.
 
-Must fall **after** standing has actually begun, which is `low_warmup_s` + the
-CiA-402 enable walk + `enable_dwell`. Requesting walking earlier drops
-`standing_toggle` while the mode FSM is still in INITIALIZING, whose guard needs
-it true, and the run then sits there for good. Standing typically lands near
-12.5 s; 18.0 leaves margin for a slow enable walk.
+It replaced an absolute `bench_walk_at`, which had two failure modes a delta
+cannot have. A slow CiA-402 enable walk ate the standing window instead of
+sliding the whole sequence. And an absolute time that landed before standing
+dropped `standing_toggle` while the FSM was still in INITIALIZING — whose guard
+needs it **true** — parking the run there for good.
+
+It is a **permission, not a trigger**: STANDING → WALKING still needs the leg
+unloaded, so nothing happens until you take a step. Being early therefore costs
+nothing; being late means the leg will not swing when you do. Set it just past
+`STANDING.duration` (the pose ramp), and well before the treadmill belts move if
+they are in play — see `runtime/README.md`. `None` = never walk.
 
 **`bench_swing_at`** — the scripted stand-in for the space key, for a leg in a
 harness where the foot never loads and no toe-off is ever produced. Entering
 walking already fires one swing of its own, so the first entry is spaced clear of
 it. `tmax` runs from the first actuating tick, so the last entry has to leave
 room for its own swing to finish.
+
+---
+
+## TreadmillParams
+
+The Bertec belts, driven from a run by `BeltSupervisor` in the parent process.
+`host` / `port` / `timeout_s` are the Control Panel socket; the rest govern belt
+motion.
+
+**`enabled`** — the deliberate per-session opt-in. Belts move only with this
+**and** `RUNTIME.arm_motion`: arming the leg is the *veto*, not the permission,
+because `arm_motion` is true on every walking run including bench and overground
+ones. With `require_contact` false there is no physical precondition left, so
+this flag is the only thing between a bench run and the belts spinning up behind
+you. Put it back to `False` afterwards.
+
+**`speed` / `acc`** — belt speed and the planned ramp. `max_speed` refuses a
+configured `speed` above it, to catch a typo before it reaches the hardware.
+
+**`stop_acc`** — fault stops, deliberately harder than `acc`: 0.8 m/s dies in
+~0.5 s instead of 1.6.
+
+**`countdown_s`** — from "the leg has finished standing" (`STANDING.duration`
+after the mode FSM reaches STANDING) to the belts moving.
+
+**`require_contact`** — also require the prosthetic foot loaded before starting.
+False for treadmill work, where you are certainly standing on the belt; turn it
+on for overground, and bench-check that contact asserts when you stand the way
+you stand.
+
+**`max_stale_passes`** — monitor-loop passes with no advance in `b3.seq` before
+the control process is called hung and the belts stop. `seq` is used rather than
+`Process.is_alive()`, which stays true for a process stuck in a syscall.
+
+The full sequence, the stop conditions and what the software cannot cover are in
+`runtime/README.md`.
 
 ---
 

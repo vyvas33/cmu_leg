@@ -19,7 +19,7 @@ are the logged `stance` / `standing` rather than our contact detection, so a
 disagreement here is the swing controller and nothing upstream of it.
 
 Run:  uv run python -m cmu_leg.tests.nn_swing_replay
-Writes nn_swing_replay.png next to this file.
+Writes plots/nn_swing_replay.png.
 
 Authors: vkalva, Claude
 """
@@ -32,6 +32,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+from cmu_leg.tests import plot_path
 from cmu_leg.config.params import COMMON, NNSWING
 from cmu_leg.control.utils import Lowpass, PID, clamp
 from cmu_leg.control.high_level.walking.nn_predictor import (NeuralPredictor,
@@ -47,7 +48,7 @@ from cmu_leg.tests.nn_phase_chart_replay import (HEEL_ANGLE, HEEL_RADIUS,
 
 HERE = Path(__file__).parent
 MAT = HERE / "data" / "gaitData20251015_test7_NN_vicon.mat"
-PNG = HERE / "nn_swing_replay.png"
+PNG = plot_path("nn_swing_replay.png")
 
 BASE = dict(hip_angle=0, knee_angle=7, hip_x=58, hip_z=60, knee_x=61,
             knee_z=63, hip_z_comp=86, stance=29, standing=30, hip_vel=1)

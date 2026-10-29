@@ -16,7 +16,7 @@ References, all `nntorque`:
     col 19  slope_ini
 
 Run:  uv run python -m cmu_leg.tests.nn_phase2_replay
-Writes nn_phase2_replay.png next to this file.
+Writes plots/nn_phase2_replay.png.
 
 Authors: vkalva, Claude
 """
@@ -29,13 +29,14 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+from cmu_leg.tests import plot_path
 from cmu_leg.config.params import COMMON, NNSWING
 from cmu_leg.control.utils import Lowpass
 from cmu_leg.control.high_level.walking.nn_swing import Phase2
 
 HERE = Path(__file__).parent
 MAT = HERE / "data" / "gaitData20251015_test7_NN_vicon.mat"
-PNG = HERE / "nn_phase2_replay.png"
+PNG = plot_path("nn_phase2_replay.png")
 
 BASE = dict(hip_angle=0, hip_vel=1)
 NT = dict(phase2=3, knee=11, knee_vel=12, count=13, slope=14, knee_frozen=15,

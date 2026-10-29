@@ -13,7 +13,7 @@ Phase 1 anchors onto its own previous output, so once a swing starts the
 command is open loop. Only the first anchor comes from the log.
 
 Run:  uv run python -m cmu_leg.tests.nn_phase1_replay
-Writes nn_phase1_replay.png next to this file.
+Writes plots/nn_phase1_replay.png.
 
 Authors: vkalva, Claude
 """
@@ -26,13 +26,14 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+from cmu_leg.tests import plot_path
 from cmu_leg.config.params import COMMON
 from cmu_leg.control.high_level.walking.nn_swing import Phase1
 from cmu_leg.control.high_level.walking.nn_predictor import SPLINE_FUTURE
 
 HERE = Path(__file__).parent
 MAT = HERE / "data" / "gaitData20251015_test7_NN_vicon.mat"
-PNG = HERE / "nn_phase1_replay.png"
+PNG = plot_path("nn_phase1_replay.png")
 
 NN_TRAJ = slice(2, 43)
 NT = dict(knee_angle=6, swapped=5, clock=9, knee_desired=23, phase1=2, time=25)

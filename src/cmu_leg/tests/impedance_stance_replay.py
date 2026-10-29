@@ -46,7 +46,7 @@ re-derived from the halls, so this exercises the controller alone and is not
 contaminated by contact-detection error.
 
 Run:  uv run python -m cmu_leg.tests.impedance_stance_replay
-Writes impedance_stance_replay.png next to this file.
+Writes plots/impedance_stance_replay.png.
 """
 from pathlib import Path
 
@@ -56,13 +56,14 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+from cmu_leg.tests import plot_path
 from cmu_leg.control.high_level.walking.impedance_stance import ImpedanceStance
 from cmu_leg.structures.state import ProsthesisState
 from cmu_leg.config.params import KNEE, ANKLE
 
 HERE = Path(__file__).parent
 MAT = HERE / "data" / "gaitData20251015_test7_NN_vicon.mat"
-PNG = HERE / "impedance_stance_replay.png"
+PNG = plot_path("impedance_stance_replay.png")
 
 COL = dict(knee_ang=7, knee_vel=8, ankle_ang=18, ankle_vel=19,
            stance=29, standing=30, knee_tq=100, ankle_tq=105, time=107)

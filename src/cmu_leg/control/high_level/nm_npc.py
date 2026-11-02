@@ -38,7 +38,7 @@ HIP_VEL_CUTOFF = 25.0       # Hz
 class NMNPC(TorqueController):
     """Neuromuscular stance + neural-predictive swing, knee only."""
 
-    _verified = False
+    _verified = True
 
     def __init__(self, cfg: NNSwingParams = NNSWING,
                  common: CommonParams = params.COMMON):

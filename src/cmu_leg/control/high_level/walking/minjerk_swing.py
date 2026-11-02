@@ -238,13 +238,19 @@ class MinJerkSwing:
         # shared by both joints; only the knot fraction differs.
         #
         # On mode entry no stance has completed, so there is no cadence to
-        # track and a duration has to be picked. Take the slowest the clamp
-        # allows: this swing runs the instant the operator asks for walking,
-        # from a pose the soft-limit guard may well have clamped, so it is the
-        # one that should be gentlest. The baseline instead lands on the clamp
-        # floor here, because both its latch times are still zero.
+        # track and a duration has to be picked: cfg.first_swing_duration.
+        # It is its own param rather than one end of the clamp because the two
+        # ends mean different things here. swing_duration_max made this the
+        # slowest swing of the run, which is wrong on a treadmill -- at 0.8 m/s
+        # a 1 s swing carries the walker 0.8 m down the belt before the foot
+        # lands. swing_duration_min is what the baseline effectively uses (both
+        # its latch times are still zero, so it lands on the clamp floor), but
+        # tying this to the floor would move every later swing with it.
+        # Knot accel goes as 1/T^2, so a shorter first swing is also the most
+        # aggressive one, from a freshly reset PID -- which is the tradeoff
+        # this number sets.
         if prev_stance_duration is None:
-            self._T = cfg.swing_duration_max
+            self._T = cfg.first_swing_duration
         else:
             self._T = clamp(cfg.swing_to_stance_ratio * prev_stance_duration,
                             cfg.swing_duration_min, cfg.swing_duration_max)

@@ -297,6 +297,21 @@ knot acceleration, leaving one free degree of freedom that the jerk cost resolve
 **Swing duration** adapts to cadence off the previous stance:
 `T = clamp(swing_to_stance_ratio * prev_stance_duration, min, max)`.
 
+**`first_swing_duration`** — the T used on mode entry, where no stance has
+completed and there is no cadence to scale from. Its own param rather than one
+end of the clamp, because the two ends mean different things here:
+`swing_duration_max` made the first swing the *slowest* of the run, which is
+wrong on a treadmill (at 0.8 m/s a 1 s swing carries the walker 0.8 m down the
+belt before the foot lands), while `swing_duration_min` is what the baseline
+effectively uses but tying to the floor would move every later swing with it.
+
+Knot accel goes as 1/T², so a shorter first swing is also the most aggressive
+one, from a freshly reset PID — that is the tradeoff this number sets. For
+reference, measured on the 1 Nov hardware runs: commanded T in steady walking
+had a median of 0.54 s and never exceeded 0.71 s (the *measured* swing, foot off
+the ground, is longer — median 0.69 s — because min-jerk finishes its trajectory
+and then holds).
+
 **`winter_flex_knee_accel`** — from Winter's Appendix A4 relative joint angular
 kinematics: the mean of the two samples straddling peak knee flexion, over a
 swing of `winter_swing_duration`. Time-scaled to T by the 1/t² law. Negative

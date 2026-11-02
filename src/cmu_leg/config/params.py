@@ -23,14 +23,14 @@ class RuntimeParams:
     ## Set arm_motion to True is you are ready to walk with the prosthesis on. 
 
     ########################
-    arm_motion: bool = True
+    arm_motion: bool = False
     ########################
 
     allow_motion: bool = arm_motion     # gate on MOTION; False still enables + holds
     drive_knee: bool = arm_motion       # per-joint wire gate; False = drive holds
     drive_ankle: bool = arm_motion     
     knee_torque_trip: float = 120.0      # de-energize + stop if |knee motor torque ff| exceeds [Nm]
-    ankle_torque_trip: float = 150.0     # same, ankle [Nm]
+    ankle_torque_trip: float = 170.0     # same, ankle [Nm]
     enable_grace_s: float = 2.0         # warn if not OPERATION_ENABLED this long after enable [s]
     shutdown_s: float = 1.0             # disable-ramp duration on teardown [s]
     max_stale_ticks: int = 5            # B3 watchdog: stale command -> safe zero
@@ -440,6 +440,7 @@ class MJSwingParams:
     swing_to_stance_ratio: float             # T = clamp(ratio * prev_stance, min, max)
     swing_duration_min: float                # s
     swing_duration_max: float                # s
+    first_swing_duration: float              # s, mode entry: no stance to scale from
 
     knee_flex_angle: float                   # rad, mid-swing flexion target
     knee_extend_angle: float                 # rad, end-of-swing target
@@ -474,6 +475,7 @@ MJSWING = MJSwingParams(
     swing_to_stance_ratio=0.6,
     swing_duration_min=0.4,
     swing_duration_max=1.0,
+    first_swing_duration=0.8,
 
     knee_flex_angle=60.0 * pi / 180.0,
     knee_extend_angle=10.0 * pi / 180.0,

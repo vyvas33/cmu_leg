@@ -64,8 +64,17 @@ class ExIntGuard:
                       f"{exc_type.__name__}: {exc_val}")
                 return False                  # re-raise anything else
         finally:
-            signal(SIGTERM, self.orig_sigterm)
+            # Teardown is UNINTERRUPTIBLE. Restoring SIGTERM before cleanup
+            # left the default handler armed for all of cleanup_fcn, so a parent
+            # escalating on its join timeout killed the process part-way through
+            # -- for low_level, before the drives were de-energized, which left
+            # the bus in OP and the next run's ec.connect() in a slave
+            # emergency. Ignoring it (as the Ctrl-C path already does for
+            # SIGINT) lets teardown finish; _on_sigterm would only trade the
+            # kill for a SystemExit raised mid-cleanup. Restore after.
+            signal(SIGTERM, SIG_IGN)
             self.cleanup_fcn()
+            signal(SIGTERM, self.orig_sigterm)
             if self.orig_sigint is not None:
                 signal(SIGINT, self.orig_sigint)
 

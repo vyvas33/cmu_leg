@@ -29,6 +29,11 @@ class Recorder:
         self._cols: list[str] | None = None   # fixed on first append
         self._rows: list[list] = []
 
+    @property
+    def name(self) -> str:
+        """The stream name, which is also the CSV's basename."""
+        return self._name
+
     def append(self, t: float, obj) -> None:
         flat = self._flatten(obj)
         if self._cols is None:

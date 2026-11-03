@@ -51,6 +51,10 @@ from cmu_leg.runtime.treadmill import BeltSupervisor
 from cmu_leg.utility.utils import make_run_dir
 import cmu_leg.config.params as params
 
+# Per-child join budget at teardown. Covers the de-energize (~1 s) plus
+# the log write, which is tens of MB through Python's csv module.
+JOIN_TIMEOUT_S = 30.0
+
 # Loop periods derive from the config rates -- single source of truth. The
 # control rate in particular is shared with the fixed-coefficient filters that
 # tick in the control process (standing velocity lowpasses), so it must not drift
@@ -128,15 +132,30 @@ def main():
 
     def terminate():
         """Set the stop flag and join the children; force-kill any straggler."""
-        # Belts FIRST. The joins below take up to 5 s per child, and a belt
-        # should not be running through them.
+        # Belts FIRST. The joins below can take JOIN_TIMEOUT_S per child, and a
+        # belt should not be running through them.
         belt.shutdown()
         stop_event.set()
         for p in procs:
-            p.join(timeout=5.0)
+            # Generous, because a child de-energizes within ~1 s and then spends
+            # the rest of teardown writing tens of MB of CSV. The old 5 s cut
+            # that write short, and -- before the de-energize was moved ahead of
+            # it -- cut the drives' shutdown short with it. Now the timeout only
+            # risks logs, so it is set to outlast the longest save rather than
+            # the shortest.
+            p.join(timeout=JOIN_TIMEOUT_S)
             if p.is_alive():
+                print(f"MAIN: {p.name} still alive after {JOIN_TIMEOUT_S}s; "
+                      f"terminating.")
                 p.terminate()
-                p.join()
+                # SIGTERM is ignored while ExIntGuard is in teardown, so give it
+                # a bounded grace period and then SIGKILL rather than joining
+                # forever on a child that is genuinely wedged.
+                p.join(timeout=5.0)
+                if p.is_alive():
+                    print(f"MAIN: {p.name} ignored SIGTERM; killing.")
+                    p.kill()
+                    p.join()
         print("\nMAIN: multiprocess control terminated gracefully.")
 
     with ExIntGuard("MAIN", stop_event, terminate, is_main_process=True):

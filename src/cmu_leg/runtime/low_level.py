@@ -90,9 +90,13 @@ def run(dt, tmax, buffer, cmd_buf, stop_event, start_time,
 
     def terminate_gracefully():
         gc.enable()  # undo the RT gc freeze unconditionally
-        if completion_stage >= 1:
-            for lg in (state_log, frame_log, output_log, drive_log, timing_log):
-                lg.save(run_dir)
+        # DE-ENERGIZE BEFORE SAVING. The save is tens of MB through Python's csv
+        # module and can outlast the parent's join timeout, at which point the
+        # child takes a SIGTERM that ExIntGuard has already handed back to the
+        # default handler -- killing it mid-save, before the ramp and close.
+        # That leaves the drives live and the bus in OP, and the NEXT run walks
+        # into a slave emergency inside ec.connect(). Saving after the close
+        # means a crash, a signal or a full disk costs a CSV, not the bus.
         # ALWAYS de-energize + reset the bus if the master ever came up -- even on an
         # init-time failure (an emergency during ec.connect() raises BEFORE
         # completion_stage=1). Two layers:
@@ -118,6 +122,15 @@ def run(dt, tmax, buffer, cmd_buf, stop_event, start_time,
                     ec.close()
                 except Exception as e:
                     print(f"{pname}: EtherCAT close failed during teardown: {e}")
+        # Each save is guarded on its own: one failure must not take the other
+        # four with it, the way a full disk did on 2026-11-02_191818 (low_output
+        # truncated mid-write, low_drive and low_idle never written at all).
+        if completion_stage >= 1:
+            for lg in (state_log, frame_log, output_log, drive_log, timing_log):
+                try:
+                    lg.save(run_dir)
+                except Exception as e:
+                    print(f"{pname}: saving {lg.name} failed: {e}")
         if is_verbose:
             print(f"{pname}: terminated gracefully.")
 

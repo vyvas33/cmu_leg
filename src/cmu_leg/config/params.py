@@ -34,6 +34,13 @@ class RuntimeParams:
     enable_grace_s: float = 2.0         # warn if not OPERATION_ENABLED this long after enable [s]
     shutdown_s: float = 1.0             # disable-ramp duration on teardown [s]
     max_stale_ticks: int = 5            # B3 watchdog: stale command -> safe zero
+    # Which walking policy the control process builds. A param rather than a
+    # constructor argument in control.py so that (a) switching does not mean
+    # editing source on the Jetson and (b) config.json records it -- the run
+    # log could not say which controller produced it, and the only hint was the
+    # git hash, which reads `dirty` the moment anything is edited in place.
+    # Valid: "nm_minjerk" | "nm_npc". control.py fails loudly on anything else.
+    walking_policy: str = "nm_npc"
     walk_after_standing_s: float | None = 3.0
     bench_swing_at: tuple[float, ...] = ()      # () = no scripted swings
     bench_swing_duration: float = 1.0   # s, before the MJSWING clamp
@@ -550,7 +557,9 @@ NNSWING = NNSwingParams(
     gain_accel=0.04,
     knee_kp=30.0,
     knee_ki=100.0,
-    knee_kd=15.0,
+    # 15.0 is the baseline's, at its 1 kHz. Lowered to min-jerk's value for
+    # phase margin at 500 Hz; the replay peaks 136 Nm at 15.0, 72 Nm here.
+    knee_kd=6.5,
     deriv_filter_n=100.0,
 )
 

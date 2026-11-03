@@ -165,6 +165,13 @@ def run(dt, tmax, buffer, cmd_buf, stop_event, start_time,
     # control loop is expensive or because something else is eating it.
     cpu_base = {"wall": 0.0, "proc": 0.0, "thread": 0.0}
 
+    # Resolved before the guard: a bad name should stop the run now, not after
+    # the IMU has spent its bring-up seconds.
+    POLICIES = {"nm_minjerk": NMMinJerk, "nm_npc": NMNPC}
+    if rt.walking_policy not in POLICIES:
+        raise ValueError(f"RUNTIME.walking_policy={rt.walking_policy!r} is not "
+                         f"one of {sorted(POLICIES)}")
+
     def terminate_gracefully():
         gc.enable()  # undo the RT gc freeze unconditionally
         if completion_stage >= 1:
@@ -177,11 +184,17 @@ def run(dt, tmax, buffer, cmd_buf, stop_event, start_time,
                       f"control thread {thrd:.2f} s ({thrd/wall*100:.1f}% of a core), "
                       f"other threads {other:.2f} s ({other/wall*100:.1f}%), "
                       f"process total {proc/wall*100:.1f}%")
-            for lg in (state_log, torque_log, timing_log, gait_log):
-                lg.save(run_dir)
+            # Hardware first, logs second -- same reasoning as low_level's
+            # teardown. A save that throws (full disk) used to leave the IMU
+            # serial ports open, and the next run could not reopen them.
             imu.close()
             # OperatorSource teardown; a no-op for the timed source.
             operator.close()
+            for lg in (state_log, torque_log, timing_log, gait_log):
+                try:
+                    lg.save(run_dir)
+                except Exception as e:
+                    print(f"{pname}: saving {lg.name} failed: {e}")
         if is_verbose:
             print(f"{pname}: terminated gracefully.")
 
@@ -192,9 +205,12 @@ def run(dt, tmax, buffer, cmd_buf, stop_event, start_time,
         imu.connect()
         eskf = ESKF()
         hip_accel = BackwardDifference()
-        # Neuromuscular stance + neural-predictive knee swing. Min-jerk still
-        # owns the ankle, and the knee too until the NN arms.
-        pc = ProsthesisControl(walking=NMMinJerk())
+        # Walking policy, chosen by RUNTIME.walking_policy so the choice lands
+        # in config.json instead of living as an edit to this line. Unknown
+        # names raise here rather than falling back, so a typo on the Jetson
+        # stops the run instead of silently flying the other controller.
+        pc = ProsthesisControl(walking=POLICIES[rt.walking_policy]())
+        print(f"[{pname}] walking policy: {rt.walking_policy}")
         # Operator intent. This process is spawned, so its stdin is devnull and
         # a keypress source could never come up here -- the schedule is the only
         # way to drive a run, and it is also the only deterministic one.

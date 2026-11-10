@@ -119,11 +119,21 @@ class GaitTrace:
 
     `stance_duration` is the last COMPLETED stance (what sizes the next swing),
     NaN until one finishes, so it reads as a gap rather than a fake zero.
+
+    `nn_armed` and `swing_phase` describe the NN swing path and are 0/False for
+    any policy without one. armed says whether the network is driving the knee
+    or min-jerk is still holding it, which is not otherwise visible -- a cold
+    predictor looks exactly like a network that predicted very little motion.
+    swing_phase is which of the three phase laws owns the knee (see nn_swing.
+    Phase). It CANNOT be reconstructed afterwards: the chart transitions on
+    `knee_desired`, the commanded knee angle, which no log carries.
     """
     mode: int
     contact: bool
     in_stance: bool
     stance_duration: float
+    nn_armed: bool
+    swing_phase: int
 
 
 def run(dt, tmax, buffer, cmd_buf, stop_event, start_time,
@@ -340,6 +350,8 @@ def run(dt, tmax, buffer, cmd_buf, stop_event, start_time,
                 in_stance=pc.in_stance,
                 stance_duration=(nan if pc.last_stance_duration is None
                                  else pc.last_stance_duration),
+                nn_armed=pc.nn_armed,
+                swing_phase=pc.swing_phase,
             ))
             t_log_prev = perf_counter() - log0
             sleep(idle) if idle >= 0.0 else sleep(0.0)

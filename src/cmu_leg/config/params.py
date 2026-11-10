@@ -34,12 +34,8 @@ class RuntimeParams:
     enable_grace_s: float = 2.0         # warn if not OPERATION_ENABLED this long after enable [s]
     shutdown_s: float = 1.0             # disable-ramp duration on teardown [s]
     max_stale_ticks: int = 5            # B3 watchdog: stale command -> safe zero
-    # Which walking policy the control process builds. A param rather than a
-    # constructor argument in control.py so that (a) switching does not mean
-    # editing source on the Jetson and (b) config.json records it -- the run
-    # log could not say which controller produced it, and the only hint was the
-    # git hash, which reads `dirty` the moment anything is edited in place.
-    # Valid: "nm_minjerk" | "nm_npc". control.py fails loudly on anything else.
+    # which policy to run:
+    # Valid: "nm_minjerk" | "nm_npc". control.py fails on anything else.
     walking_policy: str = "nm_npc"
     walk_after_standing_s: float | None = 3.0
     bench_swing_at: tuple[float, ...] = ()      # () = no scripted swings
@@ -264,7 +260,8 @@ KNEE = KneeParams(
     torque_constant=0.065,
     rated_current=20.0,
     gear_ratio=50.0,
-    vel_max=2000 * 2.0 * pi / 60.0 / 50.0 * 0.95, #was 5000
+    # 5000 rpm is the motor's rating and the baseline's value
+    vel_max=5000 * 2.0 * pi / 60.0 / 50.0 * 0.95,
     motor_damping=9.7032,
     motor_inertia=0.5340,
     motor_eff=0.9129,

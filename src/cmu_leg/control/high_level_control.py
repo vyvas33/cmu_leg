@@ -127,6 +127,21 @@ class ProsthesisControl:
     def last_stance_duration(self) -> float | None:
         return self._walking.last_stance_duration
 
+    # Only the NN policy has these. getattr rather than an abstract method on
+    # TorqueController, so a policy without a neural path (min-jerk, impedance)
+    # keeps its interface and simply logs the inactive values.
+    @property
+    def nn_armed(self) -> bool:
+        """Whether a neural path is driving the knee. False for policies
+        without one."""
+        return bool(getattr(self._walking, "armed", False))
+
+    @property
+    def swing_phase(self) -> int:
+        """Which NN swing phase owns the knee (nn_swing.Phase), 0 for IDLE and
+        for policies with no phase chart."""
+        return int(getattr(self._walking, "phase", 0))
+
     # --------------------------------------------------------------- compute
 
     def compute(self, state: ProsthesisState, time: float,

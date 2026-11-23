@@ -155,7 +155,8 @@ class Phase2:
         # saturated slope and the 3 rad/s floor. The baseline never had to
         # choose -- it only enters mid-swing, where its Divide would otherwise
         # produce Inf.
-        self._slope_ini = knee_vel / hip_vel if abs(hip_vel) > 1e-6 else 0.0
+        # clamped at 0: phase 2 only extends, so a positive slope commands flexion
+        self._slope_ini = min(knee_vel / hip_vel, 0.0) if abs(hip_vel) > 1e-6 else 0.0
 
         down = self._slope_ini > cfg.slope_target
         self._step = -cfg.slope_step if down else cfg.slope_step_up
